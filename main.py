@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from openai import OpenAI
 from starlette.background import BackgroundTask
 import os
@@ -57,6 +57,7 @@ def cleanup_files(*file_paths):
 
 class GenerateRequest(BaseModel):
     prompt: str
+    image_url: str | None = Field(default=None, alias="imageUrl")
     model: str = "nvidia/nemotron-3-super-120b-a12b"
 
 class CompileRequest(BaseModel):
@@ -139,11 +140,18 @@ async def generate_scad(request: GenerateRequest):
     """
 
     try:
+        user_content = request.prompt
+        if request.image_url:
+            user_content = [
+                {"type": "text", "text": request.prompt},
+                {"type": "image_url", "image_url": {"url": request.image_url}},
+            ]
+
         response = client.chat.completions.create(
             model=request.model,
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": request.prompt}
+                {"role": "user", "content": user_content}
             ],
             temperature=0.1
         )
