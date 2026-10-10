@@ -1,17 +1,20 @@
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from openai import OpenAI
+from openai import AsyncOpenAI, OpenAI
 from starlette.background import BackgroundTask
 import os
+import re
 import shutil
 import subprocess
 import tempfile
-from dotenv import load_dotenv
+import traceback
 from fastapi.middleware.cors import CORSMiddleware
-
-load_dotenv()
 
 app = FastAPI(title="RockyCAD API")
 
@@ -25,8 +28,12 @@ app.add_middleware(
 )
 
 client = OpenAI(
-    base_url="https://api.tokenfactory.nebius.com/v1/",
-    api_key=os.environ.get("NEBIUS_API_KEY")
+    base_url="https://openrouter.ai/api/v1",
+    api_key=os.getenv("OPENROUTER_API_KEY")
+)
+openrouter_client = AsyncOpenAI(
+    base_url="https://openrouter.ai/api/v1",
+    api_key=os.getenv("OPENROUTER_API_KEY"),
 )
 
 def find_openscad_binary():
@@ -55,10 +62,10 @@ def cleanup_files(*file_paths):
         except OSError:
             pass
 
-class GenerateRequest(BaseModel):
+class PromptRequest(BaseModel):
     prompt: str
+    image_base64: str | None = None
     image_url: str | None = Field(default=None, alias="imageUrl")
-    model: str = "nvidia/nemotron-3-super-120b-a12b"
 
 class CompileRequest(BaseModel):
     scad_code: str
@@ -68,105 +75,52 @@ class FixRequest(BaseModel):
     model: str = "nvidia/nemotron-3-super-120b-a12b"
 
 @app.post("/api/generate")
-async def generate_scad(request: GenerateRequest):
-    if not os.environ.get("NEBIUS_API_KEY"):
-        raise HTTPException(status_code=500, detail="NEBIUS_API_KEY not set in environment or .env file.")
-
-    system_prompt = """
-    You are RockyCAD, an expert mechanical CAD engineer and interactive AI assistant. Your goal is to help users design 3D models and generate strictly valid, printable OpenSCAD code.
-
-    === PHASE 1: CONVERSE & CLARIFY (STRICT LIMIT) ===
-    1. If a user provides a decent starting point, move immediately to code generation.
-    2. If the request is incredibly vague, ask a MAXIMUM of 1 or 2 essential clarifying questions. DO NOT output long lists.
-    3. INVENT REASONABLE DEFAULTS: Make professional engineering guesses for missing dimensions. The user will tweak them later.
-
-    === PHASE 2: CODE GENERATION & STRICT CAD PROTOCOL ===
-    You lack visual spatial awareness, so you MUST follow this rigid Order of Operations to prevent disconnected, floating parts.
-
-    THE SOLID BODY PROTOCOL:
-    1. POSITIVE MASS FIRST: Always build the entire positive solid body first.
-    2. THE HULL SHORTCUT: If a design requires connecting multiple columns, pegs, or mounts (like a bracket), DO NOT just guess their translations and hope they touch. Place the components, and wrap them in a `hull()` block. `hull()` acts as geometric shrink-wrap, mathematically guaranteeing a single, unified solid bridge between the parts.
-    3. DIFFERENCE LAST: Wrap the finalized positive mass in a `difference()` block, and subtract all holes, cuts, and negative spaces at the very end. 
-    4. Z-FIGHTING PREVENTION: Any negative cylinder/cube MUST be explicitly extended (e.g., `h = thickness + 2`) to punch cleanly through the positive mass.
-
-    OPENSCAD SYNTAX RULES:
-    - ALWAYS put `$fn = 64;` at the absolute top.
-    - NO UNCALLED MODULES: Declare the geometry flatly in the global scope so it actually renders.
-    - NO SHAPE VARIABLES: NEVER assign 3D shapes to variables (e.g., `shape = cube();` is ILLEGAL).
-    - SEMICOLONS: Ensure every variable and module call ends with a semicolon (;).
-
-    === OUTPUT FORMAT ===
-    Output the code strictly inside a single Markdown block at the end. 
-    
-    EXAMPLE OF CORRECT TOPOLOGY (e.g., Flanged Bearing Block):
-    ```openscad
-    $fn = 64;
-    
-    // Parameters
-    cyl_dia = 30; 
-    cyl_h = 20; 
-    tab_ext = 15; 
-    tab_width = 30; 
-    tab_thick = 5; 
-    bearing_dia = 22; 
-    screw_dia = 5;
-    
-    // Geometry
-    difference() {
-        // 1. Positive Mass (Ensure components physically overlap)
-        union() {
-            cylinder(d=cyl_dia, h=cyl_h); // Main body
-            
-            // Right tab overlapping into the cylinder
-            translate([cyl_dia/2, -tab_width/2, 0]) 
-                cube([tab_ext, tab_width, tab_thick]); 
-                
-            // Left tab overlapping into the cylinder
-            translate([-cyl_dia/2 - tab_ext, -tab_width/2, 0]) 
-                cube([tab_ext, tab_width, tab_thick]);
-        }
-        
-        // 2. Negative Space (All holes extended by +2 height to prevent z-fighting)
-        translate([0, 0, -1]) 
-            cylinder(d=bearing_dia, h=cyl_h + 2); // Center hole
-            
-        translate([cyl_dia/2 + tab_ext/2, 0, -1]) 
-            cylinder(d=screw_dia, h=tab_thick + 2); // Right screw hole
-            
-        translate([-cyl_dia/2 - tab_ext/2, 0, -1]) 
-            cylinder(d=screw_dia, h=tab_thick + 2); // Left screw hole
-    }
-    ```
-    """
-
+async def generate_scad(request: PromptRequest):
     try:
-        user_content = request.prompt
-        if request.image_url:
+        if not os.getenv("OPENROUTER_API_KEY"):
+            raise HTTPException(status_code=500, detail="OPENROUTER_API_KEY not set in environment or .env file.")
+
+        system_prompt = (
+            "You are RockyCAD, an expert parametric CAD assistant.\n"
+            "For general conversation, greetings, or questions, communicate naturally and conversationally.\n"
+            "When the user asks to design, generate, or build a 3D component, you must output ONLY valid OpenSCAD code enclosed within ```openscad and ``` markdown blocks. Use clean parameters at the top."
+        )
+
+        user_content: str | list[dict[str, object]] = request.prompt
+        image_data = request.image_base64 or request.image_url
+        if image_data:
+            if not image_data.startswith("data:"):
+                image_data = f"data:image/png;base64,{image_data}"
             user_content = [
                 {"type": "text", "text": request.prompt},
-                {"type": "image_url", "image_url": {"url": request.image_url}},
+                {"type": "image_url", "image_url": {"url": image_data}},
             ]
 
-        response = client.chat.completions.create(
-            model=request.model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content}
-            ],
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": "a 15 cm cylindrical rod with 1.5mm thickness"},
+            {
+                "role": "assistant",
+                "content": "```openscad\n// Parameters\nlength = 150; // 15cm in mm\ndiameter = 1.5; // 1.5mm diameter\n$fn = 64;\n// Solid rod\ncylinder(h=length, d=diameter);\n```",
+            },
+            {"role": "user", "content": user_content},
+        ]
+
+        response = await openrouter_client.chat.completions.create(
+            model="openrouter/free",
+            messages=messages,
             temperature=0.1
         )
 
-        scad_code = response.choices[0].message.content.strip()
+        response_text = response.choices[0].message.content or ""
+        code_match = re.search(r"```[a-zA-Z0-9_-]*\s*\r?\n([\s\S]*?)```", response_text)
+        scad_code = code_match.group(1).strip() if code_match else response_text.strip()
 
-        # Strip accidental markdown fencing from the model
-        if scad_code.startswith("```"):
-            lines = scad_code.split("\n")
-            scad_code = "\n".join([line for line in lines if not line.startswith("```")])
-
-        return {"scad_code": scad_code.strip()}
+        return {"scad_code": scad_code}
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Nebius API error: {str(e)}")
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/fix")
 async def fix_scad(request: FixRequest):
