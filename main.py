@@ -6,7 +6,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from openai import AsyncOpenAI, OpenAI
+from openai import APIStatusError, AsyncOpenAI
 from starlette.background import BackgroundTask
 import os
 import re
@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import tempfile
 import traceback
+from typing import Literal
 from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="RockyCAD API")
@@ -27,13 +28,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-client = OpenAI(
-    base_url="https://openrouter.ai/api/v1",
-    api_key=os.getenv("OPENROUTER_API_KEY")
-)
 openrouter_client = AsyncOpenAI(
     base_url="https://openrouter.ai/api/v1",
-    api_key=os.getenv("OPENROUTER_API_KEY"),
+    api_key=os.getenv("OPENROUTER_API_KEY") or "",
 )
 
 def find_openscad_binary():
@@ -62,17 +59,21 @@ def cleanup_files(*file_paths):
         except OSError:
             pass
 
+class ChatHistoryMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+
 class PromptRequest(BaseModel):
     prompt: str
     image_base64: str | None = None
     image_url: str | None = Field(default=None, alias="imageUrl")
+    history: list[ChatHistoryMessage] = Field(default_factory=list)
 
 class CompileRequest(BaseModel):
     scad_code: str
 
 class FixRequest(BaseModel):
     scad_code: str
-    model: str = "nvidia/nemotron-3-super-120b-a12b"
 
 @app.post("/api/generate")
 async def generate_scad(request: PromptRequest):
@@ -80,11 +81,14 @@ async def generate_scad(request: PromptRequest):
         if not os.getenv("OPENROUTER_API_KEY"):
             raise HTTPException(status_code=500, detail="OPENROUTER_API_KEY not set in environment or .env file.")
 
-        system_prompt = (
-            "You are RockyCAD, an expert parametric CAD assistant.\n"
-            "For general conversation, greetings, or questions, communicate naturally and conversationally.\n"
-            "When the user asks to design, generate, or build a 3D component, you must output ONLY valid OpenSCAD code enclosed within ```openscad and ``` markdown blocks. Use clean parameters at the top."
-        )
+        system_prompt = """You are RockyCAD, an elite mechanical CAD engineer and conversational AI.
+HOW TO RESPOND:
+1. Always reply naturally and conversationally first. Acknowledge the user's exact dimensions, explain how you are constructing the part (e.g., 'I'll create a 50mm tall cylinder with a 20mm outer diameter and subtract a 5mm through-hole down the center'), or ask clarifying questions if a dimension (like outer diameter vs inner hole diameter) is missing.
+2. Whenever creating or updating a 3D model, include the complete, valid OpenSCAD code inside a ```openscad ... ``` markdown block at the end of your conversational response.
+OPENSCAD ENGINEERING RULES:
+- Always put `$fn = 100;` at the very top for smooth circular geometry.
+- Define all dimensions as clear variables at the top so the parametric sliders can read them.
+- NEVER generate a solid cylinder when the user asks for a hole, tube, pipe, or hollow part! Always use `difference()` with an `outer_diameter` (if the user only gives the hole diameter, pick a sensible outer_diameter like hole_diameter * 2.5 and mention it in chat) and subtract the inner cylinder extending 1mm past both ends (`translate([0,0,-0.5]) cylinder(h=height+1, d=hole_diameter);`)."""
 
         user_content: str | list[dict[str, object]] = request.prompt
         image_data = request.image_base64 or request.image_url
@@ -96,27 +100,41 @@ async def generate_scad(request: PromptRequest):
                 {"type": "image_url", "image_url": {"url": image_data}},
             ]
 
+        conversation_history = [
+            {"role": message.role, "content": message.content}
+            for message in request.history[-6:]
+        ]
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": "a 15 cm cylindrical rod with 1.5mm thickness"},
-            {
-                "role": "assistant",
-                "content": "```openscad\n// Parameters\nlength = 150; // 15cm in mm\ndiameter = 1.5; // 1.5mm diameter\n$fn = 64;\n// Solid rod\ncylinder(h=length, d=diameter);\n```",
-            },
+            *conversation_history,
             {"role": "user", "content": user_content},
         ]
 
-        response = await openrouter_client.chat.completions.create(
-            model="openrouter/free",
-            messages=messages,
-            temperature=0.1
-        )
+        try:
+            response = await openrouter_client.chat.completions.create(
+                model="qwen/qwen-2.5-coder-32b-instruct:free",
+                messages=messages,
+                temperature=0.1
+            )
+        except APIStatusError as error:
+            if error.status_code not in {404, 429}:
+                raise
+            response = await openrouter_client.chat.completions.create(
+                model="openrouter/free",
+                messages=messages,
+                temperature=0.1
+            )
 
         response_text = response.choices[0].message.content or ""
-        code_match = re.search(r"```[a-zA-Z0-9_-]*\s*\r?\n([\s\S]*?)```", response_text)
-        scad_code = code_match.group(1).strip() if code_match else response_text.strip()
+        code_match = re.search(r"```openscad\s*\r?\n([\s\S]*?)```", response_text, re.IGNORECASE)
+        scad_code = code_match.group(1).strip() if code_match else ""
+        message = (
+            f"{response_text[:code_match.start()]}{response_text[code_match.end():]}".strip()
+            if code_match
+            else response_text.strip()
+        )
 
-        return {"scad_code": scad_code}
+        return {"scad_code": scad_code, "message": message}
 
     except Exception as e:
         print(traceback.format_exc())
@@ -124,19 +142,20 @@ async def generate_scad(request: PromptRequest):
 
 @app.post("/api/fix")
 async def fix_scad(request: FixRequest):
-    if not os.environ.get("NEBIUS_API_KEY"):
-        raise HTTPException(status_code=500, detail="NEBIUS_API_KEY not set in environment or .env file.")
+    if not os.getenv("OPENROUTER_API_KEY"):
+        raise HTTPException(status_code=500, detail="OPENROUTER_API_KEY not set in environment or .env file.")
 
     system_prompt = """You are an OpenSCAD topology corrector. The provided code may have disconnected parts, floating geometry, or z-fighting.
 1. PRESERVE INTENTIONAL CORNERS: ONLY use `hull()` if parts are completely floating and disconnected in mid-air. If the parts are already flush, touching, or overlapping (like an L-bracket), use a standard `union()` instead to preserve sharp inner corners. Do not turn L-shapes into solid wedges.
 2. Group all positive mass inside a single `union()`.
 3. Wrap the entire assembly in a `difference()` block and subtract the holes LAST.
-4. GUARANTEE THROUGH-HOLES: Ensure all subtractive cylinders/cubes are sufficiently long (e.g., h=200) and explicitly set to `center=true` to completely and cleanly pierce the positive mass. Do not leave blind holes or shallow dents.
-5. Output ONLY the raw OpenSCAD code inside a markdown block. Do not output conversational text."""
+4. GUARANTEE THROUGH-HOLES: Each hole cutter must extend at least 1 mm beyond the outer body overall (0.5 mm beyond each face) to prevent Z-fighting. For example, for a 50 mm body along Z, use `translate([0,0,-0.5]) cylinder(h=51, d=5);`. Do not leave blind holes or shallow dents.
+5. Every OpenSCAD script MUST start on its first line with exactly `$fn = 100;`. Do not put comments or other code before it, and do not override $fn later.
+6. Output ONLY raw OpenSCAD code, with no markdown fences or conversational text."""
 
     try:
-        response = client.chat.completions.create(
-            model=request.model,
+        response = await openrouter_client.chat.completions.create(
+            model="openrouter/free",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": request.scad_code},
@@ -144,16 +163,21 @@ async def fix_scad(request: FixRequest):
             temperature=0.1,
         )
 
-        scad_code = response.choices[0].message.content.strip()
+        scad_code = response.choices[0].message.content or ""
+        code_match = re.search(r"```[a-zA-Z0-9_-]*\s*\r?\n([\s\S]*?)```", scad_code)
+        if code_match:
+            scad_code = code_match.group(1)
+        scad_code = scad_code.strip()
+        if not scad_code:
+            raise HTTPException(status_code=502, detail="OpenRouter returned no corrected OpenSCAD code.")
 
-        if scad_code.startswith("```"):
-            lines = scad_code.split("\n")
-            scad_code = "\n".join([line for line in lines if not line.startswith("```")])
-
-        return {"scad_code": scad_code.strip()}
+        return {"scad_code": scad_code}
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Nebius API error: {str(e)}")
+        if isinstance(e, HTTPException):
+            raise
+        print(traceback.format_exc())
+        raise HTTPException(status_code=502, detail=f"OpenRouter Auto-Fix error: {str(e)}")
 
 @app.post("/api/compile")
 async def compile_scad(request: CompileRequest):
