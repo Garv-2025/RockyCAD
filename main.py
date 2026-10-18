@@ -5,19 +5,24 @@ load_dotenv()
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_community.vectorstores import FAISS
+from langchain_core.documents import Document
 from pydantic import BaseModel, Field
-from openai import APIStatusError, AsyncOpenAI
+from openai import AsyncOpenAI
 from starlette.background import BackgroundTask
 import os
 import re
 import shutil
 import subprocess
 import tempfile
-import traceback
+import logging
 from typing import Literal
 from fastapi.middleware.cors import CORSMiddleware
 
+logger = logging.getLogger(__name__)
 app = FastAPI(title="RockyCAD API")
+vector_store: FAISS | None = None
 
 # Whitelist the Next.js frontend to allow API requests
 app.add_middleware(
@@ -28,10 +33,42 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-openrouter_client = AsyncOpenAI(
-    base_url="https://openrouter.ai/api/v1",
-    api_key=os.getenv("OPENROUTER_API_KEY") or "",
+api_key = os.getenv("OPENROUTER_API_KEY")
+client = (
+    AsyncOpenAI(base_url="https://openrouter.ai/api/v1", api_key=api_key)
+    if api_key
+    else None
 )
+
+
+@app.on_event("startup")
+async def initialize_vector_store() -> None:
+    global vector_store
+
+    embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+    documents = [
+        Document(page_content=(
+            "OpenSCAD parametric CSG: Always put $fn=100; at the top. "
+            "Define all variables at the top of the script before geometry."
+        )),
+        Document(page_content=(
+            "To make a hollow tube, use "
+            "difference() { cylinder(d=outer); translate([0,0,-1]) "
+            "cylinder(d=inner, h=h+2); }. Give the outer cylinder the desired "
+            "height h, and extend the inner cutter past both ends."
+        )),
+        Document(page_content=(
+            "Use union() to combine solids and difference() to subtract holes. "
+            "Place dimensions in named variables for easy parametric editing."
+        )),
+        Document(page_content=(
+            "For a through-hole, make the cutter longer than the body and offset "
+            "it so it extends beyond both faces. Use centered geometry or "
+            "explicit translations consistently."
+        )),
+    ]
+    texts = [document.page_content for document in documents]
+    vector_store = FAISS.from_texts(texts, embeddings)
 
 def find_openscad_binary():
     """Detects OpenSCAD on Windows or Linux, resolving PATH or standard install paths."""
@@ -63,8 +100,9 @@ class ChatHistoryMessage(BaseModel):
     role: Literal["user", "assistant"]
     content: str
 
-class PromptRequest(BaseModel):
-    prompt: str
+class GenerateRequest(BaseModel):
+    messages: list[ChatHistoryMessage] | None = None
+    prompt: str | None = None
     image_base64: str | None = None
     image_url: str | None = Field(default=None, alias="imageUrl")
     history: list[ChatHistoryMessage] = Field(default_factory=list)
@@ -76,73 +114,102 @@ class FixRequest(BaseModel):
     scad_code: str
 
 @app.post("/api/generate")
-async def generate_scad(request: PromptRequest):
+async def generate_scad(request: GenerateRequest):
     try:
-        if not os.getenv("OPENROUTER_API_KEY"):
+        if client is None:
             raise HTTPException(status_code=500, detail="OPENROUTER_API_KEY not set in environment or .env file.")
+        if vector_store is None:
+            raise HTTPException(status_code=503, detail="The CAD knowledge base is not initialized.")
 
-        system_prompt = """You are RockyCAD, an elite mechanical CAD engineer and conversational AI.
-HOW TO RESPOND:
-1. Always reply naturally and conversationally first. Acknowledge the user's exact dimensions, explain how you are constructing the part (e.g., 'I'll create a 50mm tall cylinder with a 20mm outer diameter and subtract a 5mm through-hole down the center'), or ask clarifying questions if a dimension (like outer diameter vs inner hole diameter) is missing.
-2. Whenever creating or updating a 3D model, include the complete, valid OpenSCAD code inside a ```openscad ... ``` markdown block at the end of your conversational response.
-OPENSCAD ENGINEERING RULES:
-- Always put `$fn = 100;` at the very top for smooth circular geometry.
-- Define all dimensions as clear variables at the top so the parametric sliders can read them.
-- NEVER generate a solid cylinder when the user asks for a hole, tube, pipe, or hollow part! Always use `difference()` with an `outer_diameter` (if the user only gives the hole diameter, pick a sensible outer_diameter like hole_diameter * 2.5 and mention it in chat) and subtract the inner cylinder extending 1mm past both ends (`translate([0,0,-0.5]) cylinder(h=height+1, d=hole_diameter);`)."""
+        if request.messages is not None:
+            conversation = [
+                {"role": message.role, "content": message.content}
+                for message in request.messages
+            ]
+        elif request.prompt and request.prompt.strip():
+            conversation = [
+                {"role": message.role, "content": message.content}
+                for message in request.history[-6:]
+            ]
+            conversation.append({"role": "user", "content": request.prompt.strip()})
+        else:
+            raise HTTPException(status_code=422, detail="Provide a non-empty prompt or chat messages.")
 
-        user_content: str | list[dict[str, object]] = request.prompt
+        latest_user_message = next(
+            (message for message in reversed(conversation) if message["role"] == "user"),
+            None,
+        )
+        if latest_user_message is None:
+            raise HTTPException(status_code=422, detail="Chat history must include a user message.")
+
+        query = latest_user_message["content"]
+        if not query.strip():
+            raise HTTPException(status_code=422, detail="The latest user message cannot be empty.")
+
         image_data = request.image_base64 or request.image_url
         if image_data:
             if not image_data.startswith("data:"):
                 image_data = f"data:image/png;base64,{image_data}"
-            user_content = [
-                {"type": "text", "text": request.prompt},
+            latest_user_message["content"] = [
+                {"type": "text", "text": query},
                 {"type": "image_url", "image_url": {"url": image_data}},
             ]
 
-        conversation_history = [
-            {"role": message.role, "content": message.content}
-            for message in request.history[-6:]
-        ]
-        messages = [
+        context_documents = vector_store.similarity_search(query, k=2)
+        context = "\n\n".join(document.page_content for document in context_documents)
+        system_prompt = f"""You are a CAD assistant. Instead of raw OpenSCAD code, output a JSON array of primitive shapes matching the frontend scene state. Valid types are "box", "cylinder", "sphere", and "cone". Each object must include "type", "position" [x, y, z], "scale" [x, y, z], "rotation" [x, y, z], and "params".
+For "box", the "params" object MUST contain exactly "width", "length", and "height" as numbers. Never use "thickness", "depth", or "size". Example: {{"width": 50, "length": 50, "height": 5}}.
+For "cylinder", the "params" object MUST contain "radius" (number) and "height" (number). Do not use "diameter". To model regular polygonal prisms (such as a hexagonal hole or nut), use type "cylinder" and include a "segments" key in the "params" object (e.g., {{"radius": 10, "height": 20, "segments": 6}}). For smooth circles, omit "segments". For "cone", use radius and height keys. For "sphere", use "radius" (number).
+CRITICAL: NEVER use the `scale` array to set physical dimensions. The `scale` array MUST ALWAYS be exactly `[1, 1, 1]`. You must define all sizes strictly inside the `params` object (e.g., `radius`, `height`, `width`).
+Always place objects so they rest ON the floor. Because origins are center-based, the "position" Z-coordinate MUST always be exactly half of the object's height (e.g., if height is 40, position Z is 20).
+To subtract geometry (make a hole), add "isHole": true. Put the complete JSON array strictly inside a ```json ... ``` block. You may add a short, natural language explanation outside the block; do not output OpenSCAD code.
+
+You are also an expert mechanical engineer. Use the retrieved OpenSCAD references below when relevant:
+<retrieved_context>
+{context}
+</retrieved_context>
+
+Understand the requested dimensions and CSG operations carefully. If a crucial dimension or requirement is missing, ask a concise clarifying question and do not invent shapes. Return an empty JSON array only when the user is asking a question rather than requesting geometry.
+Keep coordinate calculations strictly under 3 sentences before outputting the final JSON array. Ensure every subtracting object explicitly includes `"isHole": true`."""
+        prompt_messages = [
             {"role": "system", "content": system_prompt},
-            *conversation_history,
-            {"role": "user", "content": user_content},
+            *conversation,
         ]
 
         try:
-            response = await openrouter_client.chat.completions.create(
-                model="qwen/qwen-2.5-coder-32b-instruct:free",
-                messages=messages,
-                temperature=0.1
+            response = await client.chat.completions.create(
+                model="meta-llama/llama-3.3-70b-instruct:free",
+                messages=prompt_messages,
             )
-        except APIStatusError as error:
-            if error.status_code not in {404, 429}:
-                raise
-            response = await openrouter_client.chat.completions.create(
+        except Exception:
+            logger.warning("Primary model failed; retrying generation with openrouter/free", exc_info=True)
+            response = await client.chat.completions.create(
                 model="openrouter/free",
-                messages=messages,
-                temperature=0.1
+                messages=prompt_messages,
             )
-
         response_text = response.choices[0].message.content or ""
-        code_match = re.search(r"```openscad\s*\r?\n([\s\S]*?)```", response_text, re.IGNORECASE)
-        scad_code = code_match.group(1).strip() if code_match else ""
+        json_match = re.search(
+            r"```json\b\s*([\s\S]*?)```",
+            response_text,
+            re.IGNORECASE,
+        )
+        json_payload = json_match.group(1).strip() if json_match else ""
         message = (
-            f"{response_text[:code_match.start()]}{response_text[code_match.end():]}".strip()
-            if code_match
+            f"{response_text[:json_match.start()]}{response_text[json_match.end():]}".strip()
+            if json_match
             else response_text.strip()
         )
 
-        return {"scad_code": scad_code, "message": message}
-
-    except Exception as e:
-        print(traceback.format_exc())
-        raise HTTPException(status_code=500, detail=str(e))
+        return {"message": message, "json_payload": json_payload}
+    except HTTPException:
+        raise
+    except Exception as error:
+        logger.exception("OpenRouter CAD generation failed")
+        raise HTTPException(status_code=502, detail=f"CAD generation failed: {error}") from error
 
 @app.post("/api/fix")
 async def fix_scad(request: FixRequest):
-    if not os.getenv("OPENROUTER_API_KEY"):
+    if client is None:
         raise HTTPException(status_code=500, detail="OPENROUTER_API_KEY not set in environment or .env file.")
 
     system_prompt = """You are an OpenSCAD topology corrector. The provided code may have disconnected parts, floating geometry, or z-fighting.
@@ -154,7 +221,7 @@ async def fix_scad(request: FixRequest):
 6. Output ONLY raw OpenSCAD code, with no markdown fences or conversational text."""
 
     try:
-        response = await openrouter_client.chat.completions.create(
+        response = await client.chat.completions.create(
             model="openrouter/free",
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -176,7 +243,7 @@ async def fix_scad(request: FixRequest):
     except Exception as e:
         if isinstance(e, HTTPException):
             raise
-        print(traceback.format_exc())
+        logger.exception("OpenRouter Auto-Fix failed")
         raise HTTPException(status_code=502, detail=f"OpenRouter Auto-Fix error: {str(e)}")
 
 @app.post("/api/compile")
