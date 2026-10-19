@@ -897,9 +897,6 @@ export default function RockyCADStudio() {
     if (!code || code.includes('// Your active')) return;
     const requestId = ++compileRequestIdRef.current;
     if (retryCount === 0) {
-      setSelectedObjectIds(current =>
-        current.includes('compiled-model') ? ['compiled-model'] : [],
-      );
       setCompiling(true);
       setCompileStatus('');
     }
