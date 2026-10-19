@@ -795,7 +795,7 @@ export default function RockyCADStudio() {
     abortControllerRef.current = abortController;
 
     try {
-      const res = await fetch('/api/generate', {
+      const res = await fetch("/api/chat", {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt: submittedPrompt, imageUrl, history: conversationHistory }),
@@ -872,8 +872,6 @@ export default function RockyCADStudio() {
           body: JSON.stringify({ scad_code: code }),
         });
       } catch {
-        if (requestId !== compileRequestIdRef.current) return;
-        setCompileStatus('Local OpenSCAD backend unavailable. Generated primitives remain visible in the 3D scene.');
         return;
       }
 
