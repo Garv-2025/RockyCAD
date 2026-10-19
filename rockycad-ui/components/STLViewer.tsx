@@ -498,11 +498,12 @@ function SceneGroup({ object, selected, transformTarget, gizmoMode, snapDistance
   );
 }
 
-function STLModel({ url, isMeasureMode, setMeasurePoints, setHoverPoint, wireframe, showOverhangs, clipPlane, orientation, autoOrientToken, parametricValues, compiledParamValues, gizmoMode, snapDistance, onSelectObject, onMeshRef, onTransformDragging, onManufacturingSpecs, onOrientationOptimized }: Omit<STLViewerProps, 'url' | 'sceneObjects' | 'pendingPasteObject' | 'selectedObjectIds' | 'onObjectContextMenu' | 'onSelectObjects' | 'onObjectDragStart' | 'onObjectDragEnd' | 'onPlacePendingObject' | 'onTransformObject' | 'measurePoints' | 'hoverPoint' | 'cameraResetToken' | 'autoOrientToken' | 'onManufacturingSpecs'> & {
+function STLModel({ url, isMeasureMode, setMeasurePoints, setHoverPoint, wireframe, showOverhangs, clipPlane, orientation, autoOrientToken, parametricValues, compiledParamValues, gizmoMode, snapDistance, onSelectObject, onMeshRef, onTransformDragging, onManufacturingSpecs, onOrientationOptimized, isSelected }: Omit<STLViewerProps, 'url' | 'sceneObjects' | 'pendingPasteObject' | 'selectedObjectIds' | 'onObjectContextMenu' | 'onSelectObjects' | 'onObjectDragStart' | 'onObjectDragEnd' | 'onPlacePendingObject' | 'onTransformObject' | 'measurePoints' | 'hoverPoint' | 'cameraResetToken' | 'autoOrientToken' | 'onManufacturingSpecs'> & {
   url: string;
   clipPlane: THREE.Plane;
   orientation: Orientation;
   autoOrientToken: number;
+  isSelected: boolean;
   gizmoMode: GizmoMode;
   snapDistance: number | null;
   onMeshRef: (id: string, mesh: THREE.Object3D | null) => void;
@@ -633,13 +634,17 @@ function STLModel({ url, isMeasureMode, setMeasurePoints, setHoverPoint, wirefra
         }}
         onClick={event => {
           event.stopPropagation();
-          if (isMeasureMode) handlePointClick(event);
+          if (isMeasureMode) {
+            handlePointClick(event);
+          } else {
+            onSelectObject('compiled-model');
+          }
         }}
       >
           {/* Lightened the material to a bright aluminum so it pops against the dark grid */}
           <meshStandardMaterial color={showOverhangs ? '#ffffff' : wireframe ? '#00ffcc' : '#cccccc'} vertexColors={showOverhangs} wireframe={wireframe} roughness={0.4} metalness={0.3} side={THREE.DoubleSide} clippingPlanes={[clipPlane]} />
       </mesh>
-      {meshObject && !isMeasureMode && (
+      {isSelected && meshObject && !isMeasureMode && (
         <TransformControls
           object={meshObject}
           mode={gizmoMode}
@@ -884,13 +889,20 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
         onPointerMissed={() => { if (!isDraggingObject) onSelectObject(null); }}
         onCreated={({ gl }) => { gl.localClippingEnabled = true; canvasElementRef.current = gl.domElement; }}
       >
-        <PerspectiveCamera ref={cameraRef} makeDefault position={[0, -150, 150]} up={[0, 0, 1]} fov={50} />
+        <PerspectiveCamera ref={cameraRef} makeDefault position={[0, -150, 150]} up={[0, 0, 1]} fov={50} far={10000} />
         
         {/* 1. Dedicated Studio Background Color */}
         <color attach="background" args={['#f0f4f8']} />
         
         {/* 2. Bounded Tinkercad-style workplane */}
-        <mesh position={[0, 0, -0.1]} receiveShadow>
+        <mesh
+          position={[0, 0, -0.1]}
+          receiveShadow
+          onClick={event => {
+            event.stopPropagation();
+            if (!isMeasureMode && event.button === 0) onSelectObject(null);
+          }}
+        >
           <planeGeometry args={[500, 500]} />
           <meshBasicMaterial color="#e0f2fe" transparent opacity={0.8} />
         </mesh>
@@ -954,6 +966,7 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
                     gizmoMode={gizmoMode}
                     snapDistance={snapDistance}
                     onSelectObject={onSelectObject}
+                    isSelected={selectedObjectIds.includes('compiled-model')}
                     onMeshRef={registerMeshRef}
                     isMeasureMode={isMeasureMode}
                     setMeasurePoints={setMeasurePoints}
@@ -1015,7 +1028,7 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
           enableRotate={!isMeasureMode}
           enabled={orbitEnabled && !isTransformDragging && !isDraggingObject}
           minDistance={10}
-          maxDistance={400}
+          maxDistance={5000}
           maxPolarAngle={Math.PI / 2 + 0.1}
           mouseButtons={{
             LEFT: undefined,

@@ -31,6 +31,7 @@ interface Message {
   content: string;
   isAborted?: boolean;
   imageUrl?: string;
+  isLocal?: boolean;
 }
 
 interface ProjectSession {
@@ -494,7 +495,6 @@ export default function RockyCADStudio() {
   const splitContainerRef = useRef<HTMLDivElement>(null);
   const studioPanelRef = useRef<HTMLElement>(null);
   const projectsLoadedRef = useRef(false);
-  const fallbackProjectIdRef = useRef(0);
   const currentModelSpecs = modelSpecs?.url === stlUrl ? modelSpecs.specs : null;
 
   useEffect(() => {
@@ -666,8 +666,10 @@ export default function RockyCADStudio() {
         if (session.id === activeId) {
           // Auto-generate title from the first user message
           let title = session.title;
-          if (title === 'New Project' && messages.length > 1) {
-             title = messages[1].content.slice(0, 24) + '...';
+          const latestMessage = messages[messages.length - 1];
+          const firstUserMessage = messages.find(message => message.role === 'user');
+          if (title === 'New Project' && !latestMessage?.isLocal && firstUserMessage) {
+             title = firstUserMessage.content.slice(0, 24) + '...';
           }
           return { ...session, messages, code: currentCode, title };
         }
@@ -994,9 +996,7 @@ export default function RockyCADStudio() {
       return;
     }
 
-    const code = template.replace('$fn = 64;', `$fn = ${defaultFnResolution};`);
-    const projectId = activeId || `component-${++fallbackProjectIdRef.current}`;
-    const hasActiveProject = Boolean(activeId) && sessions.some(session => session.id === projectId);
+    const componentCode = template.replace('$fn = 64;', `$fn = ${defaultFnResolution};`);
     let presetObjectIndex = 0;
     const presetObject = (
       type: SceneObject['type'],
@@ -1064,28 +1064,26 @@ export default function RockyCADStudio() {
             ),
           ];
 
-    const newProject: ProjectSession = {
-      id: projectId,
-      title: component,
-      messages: [],
-      code,
-    };
-    setSessions(previous => hasActiveProject
-      ? previous.map(session => session.id === projectId
-          ? { ...session, title: component, code }
-          : session)
-      : [newProject, ...previous]);
-    if (!activeId) setActiveId(projectId);
-    setCurrentCode(code);
+    const existingCode = currentCodeRef.current.includes('// Your active')
+      ? ''
+      : currentCodeRef.current.trimEnd();
+    const code = [existingCode, componentCode].filter(Boolean).join('\n\n');
     currentCodeRef.current = code;
+    setCurrentCode(code);
+    setMessages(previous => [
+      ...previous,
+      { role: 'assistant', content: `Imported ${component} to workspace.`, isLocal: true },
+    ]);
     undoHistoryRef.current.push(sceneObjectsRef.current);
     redoHistoryRef.current = [];
-    sceneObjectsRef.current = presetObjects;
-    setSceneObjects(presetObjects);
+    const updatedObjects = [...sceneObjectsRef.current, ...presetObjects];
+    sceneObjectsRef.current = updatedObjects;
+    setSceneObjects(updatedObjects);
     setSelectedObjectIds(presetObjects.filter(object => object.operation === 'solid').map(object => object.id));
-    sceneWorkspaceProjectIdRef.current = projectId;
-    if (stlUrl) URL.revokeObjectURL(stlUrl);
-    setStlUrl(null);
+    if (compileTimeoutRef.current) {
+      clearTimeout(compileTimeoutRef.current);
+      compileTimeoutRef.current = null;
+    }
     void handleCompile(code);
   };
 
@@ -2234,17 +2232,16 @@ export default function RockyCADStudio() {
                 executeCadCommand(cadCommand);
                 setCadCommand('');
               }}
-              className="absolute bottom-4 left-4 right-4 bg-gray-950 border-2 border-green-500 text-green-400 drop-shadow-[0_0_8px_rgba(74,222,128,0.8)] placeholder-green-700 px-4 py-3 rounded-md font-mono z-[100] opacity-100 flex items-center gap-2"
+              className="contents"
             >
-              <span className="text-green-400">&gt;</span>
               <input
                 value={cadCommand}
                 onChange={event => setCadCommand(event.target.value)}
                 aria-label="CAD command"
                 placeholder="Type a CAD command (e.g., BOX 40 40 10, CYL 15 50, HOLE 5 50, MOVE 10 0 0, DEL, CLEAR)..."
-                className="min-w-0 flex-1 bg-transparent text-green-400 placeholder-green-700 focus:outline-none focus:ring-2 focus:ring-green-400 font-mono text-sm font-semibold"
+                className="absolute bottom-4 left-4 right-4 bg-gray-950 border-2 border-green-500 text-green-400 drop-shadow-[0_0_8px_rgba(74,222,128,0.8)] placeholder-green-700 px-4 py-3 rounded-md font-mono z-[100] opacity-100"
               />
-              {cadCommandStatus && <span role="status" className="hidden max-w-48 truncate text-[9px] text-[#999999] sm:inline">{cadCommandStatus}</span>}
+              {cadCommandStatus && <span role="status" className="absolute bottom-1 right-6 z-[101] hidden max-w-48 truncate text-[9px] text-[#999999] sm:inline">{cadCommandStatus}</span>}
             </form>
             {compileStatus && (
               <div role="status" className="absolute bottom-14 left-1/2 z-20 -translate-x-1/2 rounded-lg border border-[#333333] bg-[#111111]/90 px-4 py-2 text-xs text-[#cccccc] shadow-lg backdrop-blur">
