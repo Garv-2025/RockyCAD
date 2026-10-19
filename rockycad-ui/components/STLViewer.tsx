@@ -887,14 +887,14 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
         <PerspectiveCamera ref={cameraRef} makeDefault position={[0, -150, 150]} up={[0, 0, 1]} fov={50} />
         
         {/* 1. Dedicated Studio Background Color */}
-        <color attach="background" args={['#181818']} />
+        <color attach="background" args={['#f0f4f8']} />
         
         {/* 2. Bounded Tinkercad-style workplane */}
         <mesh position={[0, 0, -0.1]} receiveShadow>
-          <planeGeometry args={[300, 300]} />
+          <planeGeometry args={[500, 500]} />
           <meshBasicMaterial color="#e0f2fe" transparent opacity={0.8} />
         </mesh>
-        <gridHelper args={[300, 300, '#888888', '#cccccc']} position={[0, 0, 0]} rotation={[Math.PI / 2, 0, 0]} />
+        <gridHelper args={[500, 50, '#444444', '#cccccc']} position={[0, 0, 0]} rotation={[Math.PI / 2, 0, 0]} />
         {isMeasureMode && hoverPoint && (
           <mesh position={hoverPoint} renderOrder={5} raycast={() => {}}>
             <sphereGeometry args={[0.5, 16, 16]} />

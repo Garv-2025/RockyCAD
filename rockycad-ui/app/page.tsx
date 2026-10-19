@@ -363,6 +363,29 @@ difference() {
     translate([x, 0, -1]) cylinder(d=5.5, h=10);
   }
 }`,
+  'M5 Spacer': `$fn = 64;
+
+difference() {
+  cylinder(d=10, h=10, center=true);
+  cylinder(d=5.3, h=12, center=true);
+}`,
+  'M5 Washer': `$fn = 64;
+
+difference() {
+  cylinder(d=12, h=1.5, center=true);
+  cylinder(d=5.3, h=3.5, center=true);
+}`,
+  'M5 Mounting Plate': `$fn = 64;
+
+difference() {
+  translate([-30, -20, 0]) cube([60, 40, 5]);
+
+  for (x = [-20, 20]) {
+    for (y = [-10, 10]) {
+      translate([x, y, 2.5]) cylinder(d=5.5, h=7, center=true);
+    }
+  }
+}`,
 };
 
 function computeSliderBounds(initialValue: number): { min: number; max: number; step: number } {
@@ -988,6 +1011,11 @@ export default function RockyCADStudio() {
       position,
       rotation,
     });
+    const presetGroup = (position: [number, number, number], children: SceneObject[]): SceneObject => ({
+      ...presetObject('group', {}, position),
+      name: component,
+      children,
+    });
     const presetObjects = component === 'NEMA 17 Stepper Mount'
       ? [
           presetObject('box', { x: 70, y: 60, z: 8 }, [0, 0, 4]),
@@ -1006,8 +1034,25 @@ export default function RockyCADStudio() {
               presetObject('cylinder', { d: 5.5, h: 8 }, [x, y, 3], 'hole'),
             ),
           ]
+        : component === 'M5 Spacer'
+            ? [presetGroup([0, 0, 5], [
+                presetObject('cylinder', { d: 10, h: 10 }, [0, 0, 0]),
+                presetObject('cylinder', { d: 5.3, h: 12 }, [0, 0, 0], 'hole'),
+              ])]
+            : component === 'M5 Washer'
+              ? [presetGroup([0, 0, 0.75], [
+                  presetObject('cylinder', { d: 12, h: 1.5 }, [0, 0, 0]),
+                  presetObject('cylinder', { d: 5.3, h: 3.5 }, [0, 0, 0], 'hole'),
+                ])]
+              : component === 'M5 Mounting Plate'
+                ? [presetGroup([0, 0, 0], [
+                    presetObject('box', { x: 60, y: 40, z: 5 }, [0, 0, 2.5]),
+                    ...[-20, 20].flatMap(x => [-10, 10].map(y =>
+                      presetObject('cylinder', { d: 5.5, h: 7 }, [x, y, 2.5], 'hole'),
+                    )),
+                  ])]
         : [
-            presetObject('box', { x: 100, y: 36, z: 8 }, [0, 0, 4]),
+              presetObject('box', { x: 100, y: 36, z: 8 }, [0, 0, 4]),
             ...[-30, 0, 30].map(x =>
               presetObject('cylinder', { d: 26, h: 30 }, [x, 0, 23]),
             ),
@@ -2189,15 +2234,15 @@ export default function RockyCADStudio() {
                 executeCadCommand(cadCommand);
                 setCadCommand('');
               }}
-              className="absolute bottom-0 left-3 right-3 z-10 flex items-center gap-2 rounded-xl border border-neutral-700/50 bg-neutral-900/60 px-3 py-2 shadow-xl backdrop-blur-md"
+              className="absolute bottom-4 left-4 right-4 bg-gray-950 border-2 border-green-500 text-green-400 drop-shadow-[0_0_8px_rgba(74,222,128,0.8)] placeholder-green-700 px-4 py-3 rounded-md font-mono z-[100] opacity-100 flex items-center gap-2"
             >
-              <span className="font-mono text-blue-400">&gt;</span>
+              <span className="text-green-400">&gt;</span>
               <input
                 value={cadCommand}
                 onChange={event => setCadCommand(event.target.value)}
                 aria-label="CAD command"
                 placeholder="Type a CAD command (e.g., BOX 40 40 10, CYL 15 50, HOLE 5 50, MOVE 10 0 0, DEL, CLEAR)..."
-                className="w-full bg-black border-2 border-green-500 text-green-400 placeholder:text-green-400/80 drop-shadow-[0_0_8px_rgba(74,222,128,0.8)] focus:outline-none focus:ring-2 focus:ring-green-400 px-3 py-2 rounded-md font-mono text-sm font-semibold"
+                className="min-w-0 flex-1 bg-transparent text-green-400 placeholder-green-700 focus:outline-none focus:ring-2 focus:ring-green-400 font-mono text-sm font-semibold"
               />
               {cadCommandStatus && <span role="status" className="hidden max-w-48 truncate text-[9px] text-[#999999] sm:inline">{cadCommandStatus}</span>}
             </form>
