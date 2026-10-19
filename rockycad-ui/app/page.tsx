@@ -145,10 +145,29 @@ function parseGeneratedSceneObjects(jsonPayload: string): SceneObject[] {
 }
 
 function toProjectSession(row: Record<string, unknown>): ProjectSession {
+  const nonModelAssistantMessages = new Set([
+    'Welcome to RockyCAD Studio. Describe the 3D model you want to generate.',
+    'Generated shapes have been added to the 3D scene.',
+    'Could you provide more details so I can create the shape?',
+    'Response stopped before completion.',
+  ]);
+  const messages = Array.isArray(row.messages)
+    ? row.messages.filter((message): message is Message =>
+        typeof message === 'object' &&
+        message !== null &&
+        'role' in message &&
+        'content' in message &&
+        (message.role === 'user' || message.role === 'assistant') &&
+        typeof message.content === 'string' &&
+        !(message.role === 'assistant' &&
+          (nonModelAssistantMessages.has(message.content) || message.content.startsWith('⚠️ '))),
+      )
+    : [];
+
   return {
     id: typeof row.id === 'string' || typeof row.id === 'number' ? String(row.id) : '',
     title: typeof row.title === 'string' ? row.title : 'New Project',
-    messages: Array.isArray(row.messages) ? row.messages as Message[] : [],
+    messages,
     code: typeof row.scad_code === 'string' ? row.scad_code : typeof row.code === 'string' ? row.code : '',
   };
 }
@@ -452,6 +471,7 @@ export default function RockyCADStudio() {
   const splitContainerRef = useRef<HTMLDivElement>(null);
   const studioPanelRef = useRef<HTMLElement>(null);
   const projectsLoadedRef = useRef(false);
+  const fallbackProjectIdRef = useRef(0);
   const currentModelSpecs = modelSpecs?.url === stlUrl ? modelSpecs.specs : null;
 
   useEffect(() => {
@@ -525,17 +545,17 @@ export default function RockyCADStudio() {
 
   const createNewProject = useCallback(() => {
     const newId = Date.now().toString();
-    const initialMsg: Message = { role: 'assistant', content: 'Welcome to RockyCAD Studio. Describe the 3D model you want to generate.' };
     const newProject: ProjectSession = {
       id: newId,
       title: 'New Project',
-      messages: [initialMsg],
+      messages: [],
       code: '// Your active OpenSCAD code will appear here',
     };
 
     setSessions(prev => [newProject, ...prev]);
     setActiveId(newId);
-    setMessages([initialMsg]);
+    setMessages([]);
+    currentCodeRef.current = newProject.code;
     setCurrentCode(newProject.code);
     setStlUrl(null);
     return newId;
@@ -817,19 +837,17 @@ export default function RockyCADStudio() {
           setStlUrl(null);
         }
       }
-      setMessages([...currentHistory, {
-        role: 'assistant',
-        content: conversationalText || (jsonPayload
-          ? 'Generated shapes have been added to the 3D scene.'
-          : 'Could you provide more details so I can create the shape?'),
-      }]);
+      const assistantContent = [
+        conversationalText,
+        jsonPayload ? `\`\`\`json\n${jsonPayload}\n\`\`\`` : '',
+      ].filter(Boolean).join('\n\n');
+      if (assistantContent) {
+        setMessages([...currentHistory, { role: 'assistant', content: assistantContent }]);
+      }
       
     } catch (err: unknown) {
       if (err instanceof Error && err.name !== 'AbortError') {
-        setMessages([...currentHistory, {
-          role: 'assistant',
-          content: `⚠️ ${err.message || 'Error communicating with FastAPI backend.'}`,
-        }]);
+        console.warn('Chat generation failed:', err);
       }
     } finally {
       if (abortControllerRef.current === abortController) {
@@ -845,13 +863,6 @@ export default function RockyCADStudio() {
 
     abortController.abort();
     setLoading(false);
-    setMessages(currentMessages => {
-      const lastIndex = currentMessages.length - 1;
-      if (lastIndex >= 0 && currentMessages[lastIndex].role === 'assistant') {
-        return currentMessages.map((message, index) => index === lastIndex ? { ...message, isAborted: true } : message);
-      }
-      return [...currentMessages, { role: 'assistant', content: 'Response stopped before completion.', isAborted: true }];
-    });
   };
 
   const handleCompile = async (code: string = currentCodeRef.current, retryCount = 0) => {
@@ -872,10 +883,19 @@ export default function RockyCADStudio() {
           body: JSON.stringify({ scad_code: code }),
         });
       } catch {
+        setCompileStatus('');
+        console.warn('OpenSCAD compile API is unavailable.');
         return;
       }
 
       if (requestId !== compileRequestIdRef.current) return;
+
+      const contentType = res.headers.get('content-type') ?? '';
+      if (res.status === 404 || contentType.includes('text/html')) {
+        setCompileStatus('');
+        console.warn(`OpenSCAD compile API is unavailable (HTTP ${res.status}).`);
+        return;
+      }
 
       if (!res.ok) {
         const errorMessage = await readApiError(res);
@@ -895,6 +915,12 @@ export default function RockyCADStudio() {
           });
 
           if (requestId !== compileRequestIdRef.current) return;
+          const correctionContentType = correctionResponse.headers.get('content-type') ?? '';
+          if (correctionResponse.status === 404 || correctionContentType.includes('text/html')) {
+            setCompileStatus('');
+            console.warn(`OpenSCAD fix API is unavailable (HTTP ${correctionResponse.status}).`);
+            return;
+          }
           if (!correctionResponse.ok) {
             throw new Error(await readApiError(correctionResponse));
           }
@@ -913,7 +939,7 @@ export default function RockyCADStudio() {
           if (requestId !== compileRequestIdRef.current) return;
           setCompileStatus('');
           const message = correctionError instanceof Error ? correctionError.message : 'Unknown correction error.';
-          console.error('Compilation self-correction failed:', { errorMessage, correctionError: message });
+          console.warn('Compilation self-correction failed:', { errorMessage, correctionError: message });
         }
         return;
       }
@@ -932,21 +958,89 @@ export default function RockyCADStudio() {
       if (requestId !== compileRequestIdRef.current) return;
       setCompileStatus('');
       const message = err instanceof Error ? err.message : 'Unknown compilation error.';
-      console.error('Compilation Error:', message);
+      console.warn('Compilation failed:', message);
     } finally {
       if (retryCount === 0) setCompiling(false);
     }
   };
 
   const handleLoadComponent = (component: string) => {
-    const code = COMPONENT_TEMPLATES[component].replace('$fn = 64;', `$fn = ${defaultFnResolution};`);
-    const projectId = createNewProject();
+    const template = COMPONENT_TEMPLATES[component];
+    if (!template) {
+      console.warn(`Unknown component template: ${component}`);
+      return;
+    }
 
-    setSessions(prev => prev.map(session =>
-      session.id === projectId ? { ...session, title: component, code } : session
-    ));
+    const code = template.replace('$fn = 64;', `$fn = ${defaultFnResolution};`);
+    const projectId = activeId || `component-${++fallbackProjectIdRef.current}`;
+    const hasActiveProject = Boolean(activeId) && sessions.some(session => session.id === projectId);
+    let presetObjectIndex = 0;
+    const presetObject = (
+      type: SceneObject['type'],
+      params: Record<string, number>,
+      position: [number, number, number],
+      operation: SceneObject['operation'] = 'solid',
+      rotation: [number, number, number] = [0, 0, 0],
+    ): SceneObject => ({
+      ...createSceneObject(type, operation),
+      name: `${component} ${++presetObjectIndex}`,
+      params,
+      position,
+      rotation,
+    });
+    const presetObjects = component === 'NEMA 17 Stepper Mount'
+      ? [
+          presetObject('box', { x: 70, y: 60, z: 8 }, [0, 0, 4]),
+          presetObject('box', { x: 70, y: 10, z: 56 }, [0, 25, 36]),
+          presetObject('cylinder', { d: 22, h: 12 }, [0, 25, 36], 'hole', [Math.PI / 2, 0, 0]),
+          ...[-15.5, 15.5].flatMap(x => [-15.5, 15.5].map(z =>
+            presetObject('cylinder', { d: 3.2, h: 12 }, [x, 25, 36 + z], 'hole', [Math.PI / 2, 0, 0]),
+          )),
+        ]
+      : component === 'Flanged Bearing Block'
+        ? [
+            presetObject('cylinder', { d: 58, h: 6 }, [0, 0, 3]),
+            presetObject('cylinder', { d: 36, h: 24 }, [0, 0, 18]),
+            presetObject('cylinder', { d: 20, h: 32 }, [0, 0, 15], 'hole'),
+            ...[[23, 0], [0, 23], [-23, 0], [0, -23]].map(([x, y]) =>
+              presetObject('cylinder', { d: 5.5, h: 8 }, [x, y, 3], 'hole'),
+            ),
+          ]
+        : [
+            presetObject('box', { x: 100, y: 36, z: 8 }, [0, 0, 4]),
+            ...[-30, 0, 30].map(x =>
+              presetObject('cylinder', { d: 26, h: 30 }, [x, 0, 23]),
+            ),
+            ...[-30, 0, 30].map(x =>
+              presetObject('cylinder', { d: 12, h: 40 }, [x, 0, 19], 'hole'),
+            ),
+            ...[-42, 42].map(x =>
+              presetObject('cylinder', { d: 5.5, h: 10 }, [x, 0, 4], 'hole'),
+            ),
+          ];
+
+    const newProject: ProjectSession = {
+      id: projectId,
+      title: component,
+      messages: [],
+      code,
+    };
+    setSessions(previous => hasActiveProject
+      ? previous.map(session => session.id === projectId
+          ? { ...session, title: component, code }
+          : session)
+      : [newProject, ...previous]);
+    if (!activeId) setActiveId(projectId);
     setCurrentCode(code);
     currentCodeRef.current = code;
+    undoHistoryRef.current.push(sceneObjectsRef.current);
+    redoHistoryRef.current = [];
+    sceneObjectsRef.current = presetObjects;
+    setSceneObjects(presetObjects);
+    setSelectedObjectIds(presetObjects.filter(object => object.operation === 'solid').map(object => object.id));
+    sceneWorkspaceProjectIdRef.current = projectId;
+    if (stlUrl) URL.revokeObjectURL(stlUrl);
+    setStlUrl(null);
     void handleCompile(code);
   };
 
@@ -1477,6 +1571,12 @@ export default function RockyCADStudio() {
         body: JSON.stringify({ scad_code: codeToFix }),
       });
 
+      const contentType = res.headers.get('content-type') ?? '';
+      if (res.status === 404 || contentType.includes('text/html')) {
+        console.warn(`OpenSCAD fix API is unavailable (HTTP ${res.status}).`);
+        return;
+      }
+
       const data = await res.json();
       if (!res.ok) {
         throw new Error(typeof data.detail === 'string' ? data.detail : 'Auto-fix request failed');
@@ -1492,7 +1592,7 @@ export default function RockyCADStudio() {
       currentCodeRef.current = fixedCode;
       await handleCompile();
     } catch (err: unknown) {
-      console.error('Auto-Fix Error:', err);
+      console.warn('Auto-Fix failed:', err);
     } finally {
       setIsFixing(false);
     }
@@ -2097,7 +2197,7 @@ export default function RockyCADStudio() {
                 onChange={event => setCadCommand(event.target.value)}
                 aria-label="CAD command"
                 placeholder="Type a CAD command (e.g., BOX 40 40 10, CYL 15 50, HOLE 5 50, MOVE 10 0 0, DEL, CLEAR)..."
-                className="min-w-0 flex-1 bg-transparent font-mono text-[10px] text-green-500 placeholder-green-700/50 focus:outline-none"
+                className="w-full bg-black border-2 border-green-500 text-green-400 placeholder:text-green-400/80 drop-shadow-[0_0_8px_rgba(74,222,128,0.8)] focus:outline-none focus:ring-2 focus:ring-green-400 px-3 py-2 rounded-md font-mono text-sm font-semibold"
               />
               {cadCommandStatus && <span role="status" className="hidden max-w-48 truncate text-[9px] text-[#999999] sm:inline">{cadCommandStatus}</span>}
             </form>
