@@ -18,6 +18,6 @@ Unlike standard text-to-3D models that generate unpredictable point clouds or su
 
 ## Getting Started
 1. Clone the repository.
-2. Add your LLM keys to `.env.local` (e.g., `OPENAI_API_KEY=your_key_here`).
+2. Set `OPENROUTER_API_KEY` in `.env.local` (and as a Vercel environment variable when deployed).
 3. Run `npm install` followed by `npm run dev`.
 4. Open `http://localhost:3000`, type a component prompt, and start modeling.

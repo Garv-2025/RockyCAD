@@ -795,14 +795,14 @@ export default function RockyCADStudio() {
     abortControllerRef.current = abortController;
 
     try {
-      const res = await fetch('http://localhost:8000/api/generate', {
+      const res = await fetch('/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt: submittedPrompt, imageUrl, history: conversationHistory }),
         signal: abortController.signal,
       });
 
-      if (!res.ok) throw new Error('Failed to generate code from backend');
+      if (!res.ok) throw new Error(await readApiError(res));
 
       const data = await res.json();
       const conversationalText = typeof data.message === 'string' ? data.message.trim() : '';
@@ -864,11 +864,18 @@ export default function RockyCADStudio() {
     }
 
     try {
-      const res = await fetch('http://localhost:8000/api/compile', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scad_code: code }),
-      });
+      let res: Response;
+      try {
+        res = await fetch('http://localhost:8000/api/compile', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ scad_code: code }),
+        });
+      } catch {
+        if (requestId !== compileRequestIdRef.current) return;
+        setCompileStatus('Local OpenSCAD backend unavailable. Generated primitives remain visible in the 3D scene.');
+        return;
+      }
 
       if (requestId !== compileRequestIdRef.current) return;
 
@@ -883,12 +890,10 @@ export default function RockyCADStudio() {
 
         setCompileStatus(`Agent self-correcting topology (Attempt ${retryCount + 1}/3)...`);
         try {
-          const correctionResponse = await fetch('http://localhost:8000/api/generate', {
+          const correctionResponse = await fetch('http://localhost:8000/api/fix', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              prompt: `The OpenSCAD compilation failed with the following error: \n\n${errorMessage}\n\nPlease fix the geometry to resolve this error. Return ONLY the raw OpenSCAD code.`,
-            }),
+            body: JSON.stringify({ scad_code: code }),
           });
 
           if (requestId !== compileRequestIdRef.current) return;
