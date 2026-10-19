@@ -882,7 +882,7 @@ export default function RockyCADStudio() {
         if (requestId !== compileRequestIdRef.current) return;
         if (retryCount >= 2) {
           setCompileStatus('');
-          alert(`Compilation Error: ${errorMessage}`);
+          console.error('Compilation Error:', errorMessage);
           return;
         }
 
@@ -913,7 +913,7 @@ export default function RockyCADStudio() {
           if (requestId !== compileRequestIdRef.current) return;
           setCompileStatus('');
           const message = correctionError instanceof Error ? correctionError.message : 'Unknown correction error.';
-          alert(`Compilation Error: ${errorMessage}\n\nSelf-correction failed: ${message}`);
+          console.error('Compilation self-correction failed:', { errorMessage, correctionError: message });
         }
         return;
       }
@@ -932,7 +932,7 @@ export default function RockyCADStudio() {
       if (requestId !== compileRequestIdRef.current) return;
       setCompileStatus('');
       const message = err instanceof Error ? err.message : 'Unknown compilation error.';
-      alert(`Compilation Error: ${message}`);
+      console.error('Compilation Error:', message);
     } finally {
       if (retryCount === 0) setCompiling(false);
     }
@@ -1492,7 +1492,7 @@ export default function RockyCADStudio() {
       currentCodeRef.current = fixedCode;
       await handleCompile();
     } catch (err: unknown) {
-      if (err instanceof Error) alert(`Auto-Fix Error: ${err.message}`);
+      console.error('Auto-Fix Error:', err);
     } finally {
       setIsFixing(false);
     }
@@ -2097,7 +2097,7 @@ export default function RockyCADStudio() {
                 onChange={event => setCadCommand(event.target.value)}
                 aria-label="CAD command"
                 placeholder="Type a CAD command (e.g., BOX 40 40 10, CYL 15 50, HOLE 5 50, MOVE 10 0 0, DEL, CLEAR)..."
-                className="min-w-0 flex-1 bg-transparent font-mono text-[10px] text-white placeholder:text-[#666666] focus:outline-none"
+                className="min-w-0 flex-1 bg-transparent font-mono text-[10px] text-green-500 placeholder-green-700/50 focus:outline-none"
               />
               {cadCommandStatus && <span role="status" className="hidden max-w-48 truncate text-[9px] text-[#999999] sm:inline">{cadCommandStatus}</span>}
             </form>
