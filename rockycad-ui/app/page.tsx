@@ -866,7 +866,7 @@ export default function RockyCADStudio() {
     try {
       let res: Response;
       try {
-        res = await fetch('http://localhost:8000/api/compile', {
+        res = await fetch('/api/compile', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ scad_code: code }),
@@ -888,7 +888,7 @@ export default function RockyCADStudio() {
 
         setCompileStatus(`Agent self-correcting topology (Attempt ${retryCount + 1}/3)...`);
         try {
-          const correctionResponse = await fetch('http://localhost:8000/api/fix', {
+          const correctionResponse = await fetch('/api/fix', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ scad_code: code }),
@@ -1471,7 +1471,7 @@ export default function RockyCADStudio() {
 
     try {
       const codeToFix = currentCode;
-      const res = await fetch('http://localhost:8000/api/fix', {
+      const res = await fetch('/api/fix', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ scad_code: codeToFix }),
