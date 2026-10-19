@@ -387,6 +387,9 @@ difference() {
     }
   }
 }`,
+  'L-Bracket': `difference(){ union(){ cube([20, 5, 20]); cube([20, 20, 5]); } translate([10, 10, -1]) cylinder(h=10, r=2.5, $fn=20); translate([10, -1, 10]) rotate([-90,0,0]) cylinder(h=10, r=2.5, $fn=20); }`,
+  'M5 Hex Nut': `difference(){ cylinder(h=4, r=4.5, $fn=6); translate([0,0,-1]) cylinder(h=6, r=2.5, $fn=30); }`,
+  'Project Enclosure': `difference(){ cube([50, 50, 20], center=true); translate([0,0,2]) cube([46, 46, 20], center=true); }`,
 };
 
 function computeSliderBounds(initialValue: number): { min: number; max: number; step: number } {
@@ -894,7 +897,9 @@ export default function RockyCADStudio() {
     if (!code || code.includes('// Your active')) return;
     const requestId = ++compileRequestIdRef.current;
     if (retryCount === 0) {
-      setSelectedObjectIds([]);
+      setSelectedObjectIds(current =>
+        current.includes('compiled-model') ? ['compiled-model'] : [],
+      );
       setCompiling(true);
       setCompileStatus('');
     }
@@ -1051,6 +1056,23 @@ export default function RockyCADStudio() {
                       presetObject('cylinder', { d: 5.5, h: 7 }, [x, y, 2.5], 'hole'),
                     )),
                   ])]
+                  : component === 'L-Bracket'
+                    ? [presetGroup([0, 0, 0], [
+                        presetObject('box', { x: 20, y: 5, z: 20 }, [10, 2.5, 10]),
+                        presetObject('box', { x: 20, y: 20, z: 5 }, [10, 10, 2.5]),
+                        presetObject('cylinder', { d: 5, h: 10, segments: 20 }, [10, 10, 4], 'hole'),
+                        presetObject('cylinder', { d: 5, h: 10, segments: 20 }, [10, 4, 10], 'hole', [-Math.PI / 2, 0, 0]),
+                      ])]
+                    : component === 'M5 Hex Nut'
+                      ? [presetGroup([0, 0, 0], [
+                          presetObject('hexagon', { d: 9, h: 4 }, [0, 0, 2]),
+                          presetObject('cylinder', { d: 5, h: 6, segments: 30 }, [0, 0, 2], 'hole'),
+                        ])]
+                      : component === 'Project Enclosure'
+                        ? [presetGroup([0, 0, 0], [
+                            presetObject('box', { x: 50, y: 50, z: 20 }, [0, 0, 0]),
+                            presetObject('box', { x: 46, y: 46, z: 20 }, [0, 0, 2], 'hole'),
+                          ])]
         : [
               presetObject('box', { x: 100, y: 36, z: 8 }, [0, 0, 4]),
             ...[-30, 0, 30].map(x =>

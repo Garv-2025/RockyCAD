@@ -886,7 +886,6 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
         onPointerMove={handleMarqueePointerMove}
         onPointerUp={handleMarqueePointerUp}
         onPointerCancel={handleMarqueePointerCancel}
-        onPointerMissed={() => { if (!isDraggingObject) onSelectObject(null); }}
         onCreated={({ gl }) => { gl.localClippingEnabled = true; canvasElementRef.current = gl.domElement; }}
       >
         <PerspectiveCamera ref={cameraRef} makeDefault position={[0, -150, 150]} up={[0, 0, 1]} fov={50} far={10000} />
@@ -895,14 +894,7 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
         <color attach="background" args={['#f0f4f8']} />
         
         {/* 2. Bounded Tinkercad-style workplane */}
-        <mesh
-          position={[0, 0, -0.1]}
-          receiveShadow
-          onClick={event => {
-            event.stopPropagation();
-            if (!isMeasureMode && event.button === 0) onSelectObject(null);
-          }}
-        >
+        <mesh position={[0, 0, -0.1]} receiveShadow>
           <planeGeometry args={[500, 500]} />
           <meshBasicMaterial color="#e0f2fe" transparent opacity={0.8} />
         </mesh>
