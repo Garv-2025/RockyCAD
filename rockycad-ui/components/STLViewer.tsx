@@ -1046,7 +1046,7 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
           makeDefault
           enableRotate={!isMeasureMode}
           enabled={orbitEnabled && !isTransformDragging && !isDraggingObject}
-          minDistance={10}
+          minDistance={1}
           maxDistance={5000}
           maxPolarAngle={Math.PI / 2 + 0.1}
           mouseButtons={{
