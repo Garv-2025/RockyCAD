@@ -888,6 +888,10 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
     <div
       ref={viewportRef}
       onContextMenu={event => event.preventDefault()}
+      onPointerDownCapture={handleMarqueePointerDown}
+      onPointerMoveCapture={handleMarqueePointerMove}
+      onPointerUpCapture={handleMarqueePointerUp}
+      onPointerCancelCapture={handleMarqueePointerCancel}
       className={`w-full h-full overflow-hidden relative ${marquee.active ? 'cursor-crosshair' : isDraggingObject ? 'cursor-grabbing' : hoveredObjectId ? 'cursor-pointer' : 'cursor-default'}`}
     >
       <Canvas
@@ -896,10 +900,6 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
           event.stopPropagation();
           event.nativeEvent.preventDefault();
         }}
-        onPointerDown={handleMarqueePointerDown}
-        onPointerMove={handleMarqueePointerMove}
-        onPointerUp={handleMarqueePointerUp}
-        onPointerCancel={handleMarqueePointerCancel}
         onPointerMissed={() => {
           if (performance.now() - lastMeshClickRef.current < 250 || isTransformDragging || isDraggingObject) return;
           onSelectObject(null);
@@ -1046,7 +1046,7 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
           ref={controlsRef}
           makeDefault
           enableRotate={!isMeasureMode}
-          enabled={orbitEnabled && !isTransformDragging && !isDraggingObject}
+          enabled={orbitEnabled && !isTransformDragging && !isDraggingObject && !marquee.active}
           minDistance={1}
           maxDistance={5000}
           maxPolarAngle={Math.PI / 2 + 0.1}
