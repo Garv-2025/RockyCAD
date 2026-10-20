@@ -34,6 +34,10 @@ interface Message {
   isLocal?: boolean;
 }
 
+function stripSafetyMetadata(text: string): string {
+  return text.replace(/\b(?:User|Response)\s+Safety\s*:\s*[a-z_-]+\b/gi, '').trim();
+}
+
 interface ProjectSession {
   id: string;
   title: string;
@@ -853,7 +857,7 @@ export default function RockyCADStudio() {
       if (!res.ok) throw new Error(await readApiError(res));
 
       const data = await res.json();
-      const conversationalText = typeof data.message === 'string' ? data.message.trim() : '';
+      const conversationalText = typeof data.message === 'string' ? stripSafetyMetadata(data.message) : '';
       const jsonPayload = typeof data.json_payload === 'string' ? data.json_payload.trim() : '';
 
       if (jsonPayload) {

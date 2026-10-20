@@ -40,6 +40,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function stripSafetyMetadata(text: string): string {
+  return text.replace(/\b(?:User|Response)\s+Safety\s*:\s*[a-z_-]+\b/gi, '').trim();
+}
+
 function isChatHistoryMessage(value: unknown): value is ChatHistoryMessage {
   return isRecord(value) &&
     (value.role === 'user' || value.role === 'assistant') &&
@@ -186,6 +190,7 @@ export async function POST(request: Request) {
     }
   }
 
+  responseText = stripSafetyMetadata(responseText);
   const jsonMatch = /```json\b\s*([\s\S]*?)```/i.exec(responseText);
   const jsonPayload = jsonMatch?.[1].trim() ?? '';
   const message = jsonMatch
