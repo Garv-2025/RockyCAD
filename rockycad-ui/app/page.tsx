@@ -1680,10 +1680,10 @@ export default function RockyCADStudio() {
   ]);
 
   return (
-    <main className="flex h-screen w-screen overflow-hidden bg-[#000000] text-[#f8fafc] font-sans">
+    <main className="flex h-screen w-screen flex-col overflow-hidden bg-[#000000] text-[#f8fafc] font-sans md:flex-row">
       
       {/* PANE 1: LEFT SIDEBAR (Library) */}
-      <aside className={`shrink-0 flex flex-col h-full overflow-hidden bg-[#050505] transition-all duration-300 ${isStudioMinimized ? 'w-0 border-r-0 p-0 opacity-0' : 'w-[260px] border-r border-[#222222] p-4'}`}>
+      <aside className={`hidden shrink-0 flex-col h-full overflow-hidden bg-[#050505] transition-all duration-300 md:flex ${isStudioMinimized ? 'w-0 border-r-0 p-0 opacity-0' : 'w-[260px] border-r border-[#222222] p-4'}`}>
         <button 
           onClick={createNewProject}
           className="flex items-center gap-2 bg-white text-black font-medium px-4 py-2.5 rounded-lg text-sm hover:bg-gray-200 transition-colors w-full justify-center mb-6"
@@ -1747,10 +1747,10 @@ export default function RockyCADStudio() {
         </div>
       </aside>
 
-      <div ref={splitContainerRef} className="flex min-w-0 flex-1 overflow-hidden">
+      <div ref={splitContainerRef} className="flex min-w-0 flex-1 flex-col overflow-hidden max-md:min-h-0 md:flex-row">
       {/* PANE 2: CENTER (Chat Assistant) */}
       <section
-        className="relative flex min-w-0 flex-col border-r border-[#222222]"
+        className="relative flex min-w-0 flex-col border-r border-[#222222] max-md:!flex-1 max-md:min-h-[40vh]"
         style={{ flex: isStudioMinimized ? '1 1 0%' : `0 0 ${chatWidth}%` }}
       >
         <header className="h-14 shrink-0 border-b border-[#222222] flex items-center justify-between px-6 bg-[#000000]/80 backdrop-blur z-10">
@@ -1894,7 +1894,7 @@ export default function RockyCADStudio() {
           aria-orientation="vertical"
           aria-label="Resize chat and studio panels"
           onPointerDown={event => beginResize('columns', event)}
-          className="w-1.5 shrink-0 cursor-col-resize bg-neutral-800 transition-colors hover:bg-blue-500"
+          className="hidden w-1.5 shrink-0 cursor-col-resize bg-neutral-800 transition-colors hover:bg-blue-500 md:block"
         />
       )}
 
@@ -1902,7 +1902,7 @@ export default function RockyCADStudio() {
       <aside
         ref={studioPanelRef}
         id="studio-panel"
-        className={`h-full overflow-hidden flex flex-col bg-[#0a0a0a] gap-4 border-l border-[#222222] transition-all duration-300 ${isStudioExpanded ? 'fixed inset-0 z-40 w-screen border-l-0 p-4' : isStudioMinimized ? 'w-0 flex-none translate-x-full border-l-0 p-0 opacity-0 pointer-events-none max-md:fixed max-md:inset-0 max-md:z-40' : 'relative min-w-0 flex-1 p-4'}`}
+        className={`h-full overflow-hidden flex flex-col bg-[#0a0a0a] gap-4 border-l border-[#222222] transition-all duration-300 ${isStudioExpanded ? 'fixed inset-0 z-40 w-screen border-l-0 p-4' : isStudioMinimized ? 'w-0 flex-none translate-x-full border-l-0 p-0 opacity-0 pointer-events-none max-md:fixed max-md:inset-0 max-md:z-40' : 'relative min-w-0 flex-1 p-4 max-md:h-auto max-md:min-h-[45vh]'}`}
       >
         <header className="flex h-8 shrink-0 items-center justify-between px-1 text-xs font-semibold tracking-widest text-[#888888]">
           <span>STUDIO WORKSPACE</span>
@@ -1935,7 +1935,7 @@ export default function RockyCADStudio() {
         </header>
         
         {/* Top Half: 3D Viewer */}
-        <div className="flex min-h-0 flex-col gap-2" style={{ flex: `0 0 ${viewerHeight}%` }}>
+        <div className="flex min-h-0 flex-col gap-2 max-md:min-h-[24vh]" style={{ flex: `0 0 ${viewerHeight}%` }}>
           <div className="flex justify-between items-center text-xs font-semibold tracking-widest text-[#888888] px-1 shrink-0">
             <span>STUDIO VIEWER</span>
             <div className="flex items-center gap-2">
@@ -2291,7 +2291,7 @@ export default function RockyCADStudio() {
         />
 
         {/* Bottom Half: Developer Code Mode */}
-        <div className="flex min-h-0 flex-1 flex-col gap-2">
+        <div className="flex min-h-0 flex-1 flex-col gap-2 max-md:min-h-[20vh]">
           <div className="flex items-center justify-between px-1 pt-2 border-t border-[#222222] shrink-0 gap-2">
             <div className="flex items-center gap-2 text-xs font-semibold tracking-widest text-[#888888] shrink-0">
               <Code2 className="w-4 h-4" /> DEVELOPER MODE
