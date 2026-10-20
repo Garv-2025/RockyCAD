@@ -655,7 +655,7 @@ function STLModel({ url, isMeasureMode, setMeasurePoints, setHoverPoint, wirefra
       >
           {/* Lightened the material to a bright aluminum so it pops against the dark grid */}
           <meshStandardMaterial color={showOverhangs ? '#ffffff' : wireframe ? '#00ffcc' : '#cccccc'} vertexColors={showOverhangs} wireframe={wireframe} roughness={0.4} metalness={0.3} side={THREE.DoubleSide} clippingPlanes={[clipPlane]} />
-          {isSelected && <Edges linewidth={2} threshold={15} color="cyan" />}
+          {isSelected && <Edges geometry={meshObject?.geometry ?? overhangGeometry ?? geom} linewidth={2} threshold={15} color="cyan" />}
       </mesh>
       {isSelected && meshObject && !isMeasureMode && (
         <TransformControls
