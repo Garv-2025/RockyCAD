@@ -1055,7 +1055,7 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
             RIGHT: THREE.MOUSE.ROTATE,
           }}
         />
-        <GizmoHelper alignment="bottom-right" margin={[60, 60]}>
+        <GizmoHelper alignment="top-right" margin={[70, 70]}>
           <GizmoViewport />
         </GizmoHelper>
       </Canvas>

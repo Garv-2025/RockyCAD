@@ -5,7 +5,7 @@ import Image from 'next/image';
 import ReactMarkdown from 'react-markdown';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
-import { Send, Square, Copy, Edit2, Play, Code2, Check, Loader2, MessageSquare, Plus, Trash2, SlidersHorizontal, Wand2, Download, Box, User, Settings, X, Ruler, RotateCcw, ChevronDown, Paperclip, Maximize2, Minimize2, PanelRightClose, PanelRightOpen, Move, Scale } from 'lucide-react';
+import { Send, Square, Copy, Edit2, Play, Code2, Check, Loader2, MessageSquare, Plus, Trash2, Download, Box, User, Settings, X, Ruler, RotateCcw, ChevronDown, Paperclip, Maximize2, Minimize2, PanelRightClose, PanelRightOpen, Move, Scale } from 'lucide-react';
 import { createClient } from '@supabase/supabase-js';
 import JSZip from 'jszip';
 import * as THREE from 'three';
@@ -409,16 +409,6 @@ function computeSliderBounds(initialValue: number): { min: number; max: number; 
   return { min: initialValue * 3, max: 0, step };
 }
 
-function formatParamValue(value: number, step: number): number {
-  return step < 1 ? parseFloat(value.toFixed(2)) : Math.round(value);
-}
-
-function updateVariableInCode(code: string, name: string, newValue: number, step: number): string {
-  const formatted = formatParamValue(newValue, step);
-  const regex = new RegExp(`^(\\s*)(${name})\\s*=\\s*[-+]?\\d+(?:\\.\\d+)?\\s*;`, 'm');
-  return code.replace(regex, `$1$2 = ${formatted};`);
-}
-
 export default function RockyCADStudio() {
   // Session State
   const [sessions, setSessions] = useState<ProjectSession[]>([]);
@@ -435,6 +425,7 @@ export default function RockyCADStudio() {
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [editText, setEditText] = useState('');
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
+  const [copySuccess, setCopySuccess] = useState(false);
   const [compiling, setCompiling] = useState(false);
   const [compileStatus, setCompileStatus] = useState('');
   const [stlUrl, setStlUrl] = useState<string | null>(null);
@@ -461,8 +452,6 @@ export default function RockyCADStudio() {
   const [pendingPasteObject, setPendingPasteObject] = useState<SceneObject | null>(null);
   const [cadCommand, setCadCommand] = useState('');
   const [cadCommandStatus, setCadCommandStatus] = useState('');
-  const [devView, setDevView] = useState<'code' | 'parametric'>('code');
-  const [isFixing, setIsFixing] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [defaultFnResolution, setDefaultFnResolution] = useState(64);
   const [autoCompileOnChange, setAutoCompileOnChange] = useState(true);
@@ -1116,23 +1105,21 @@ export default function RockyCADStudio() {
     setTimeout(() => setCopiedIndex(null), 2000);
   };
 
+  const copyCodeToClipboard = async () => {
+    try {
+      await navigator.clipboard.writeText(currentCode);
+      setCopySuccess(true);
+      setTimeout(() => setCopySuccess(false), 2000);
+    } catch (error: unknown) {
+      console.warn('Code copy failed:', error);
+    }
+  };
+
   const debouncedCompile = (code: string = currentCodeRef.current) => {
     if (compileTimeoutRef.current) clearTimeout(compileTimeoutRef.current);
     compileTimeoutRef.current = setTimeout(() => {
       void handleCompile(code);
     }, 300);
-  };
-
-  const handleParamChange = (name: string, newValue: number) => {
-    if (Number.isNaN(newValue)) return;
-    const param = params.find(p => p.name === name);
-    if (!param) return;
-
-    const clamped = Math.min(param.max, Math.max(param.min, newValue));
-    const updatedCode = updateVariableInCode(currentCodeRef.current, name, clamped, param.step);
-    currentCodeRef.current = updatedCode;
-    setCurrentCode(updatedCode);
-    debouncedCompile(updatedCode);
   };
 
   const commitSceneObjects = (updatedObjects: SceneObject[], options: { compile?: boolean; recordHistory?: boolean } = {}) => {
@@ -1622,45 +1609,6 @@ export default function RockyCADStudio() {
       alert(`Export Error: ${message}`);
     } finally {
       setIsExportingPack(false);
-    }
-  };
-
-  const handleAutoFix = async () => {
-    if (!currentCode || currentCode.includes('// Your active') || isFixing) return;
-    setIsFixing(true);
-
-    try {
-      const codeToFix = currentCode;
-      const res = await fetch('/api/fix', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scad_code: codeToFix }),
-      });
-
-      const contentType = res.headers.get('content-type') ?? '';
-      if (res.status === 404 || contentType.includes('text/html')) {
-        console.warn(`OpenSCAD fix API is unavailable (HTTP ${res.status}).`);
-        return;
-      }
-
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(typeof data.detail === 'string' ? data.detail : 'Auto-fix request failed');
-      }
-
-      const rawResponse = typeof data.scad_code === 'string' ? data.scad_code.trim() : '';
-      if (!rawResponse) throw new Error('No corrected code returned');
-
-      const codeMatch = rawResponse.match(/```(?:openscad)?\n([\s\S]*?)```/i);
-      const fixedCode = codeMatch ? codeMatch[1].trim() : rawResponse;
-
-      setCurrentCode(fixedCode);
-      currentCodeRef.current = fixedCode;
-      await handleCompile();
-    } catch (err: unknown) {
-      console.warn('Auto-Fix failed:', err);
-    } finally {
-      setIsFixing(false);
     }
   };
 
@@ -2349,104 +2297,25 @@ export default function RockyCADStudio() {
               <Code2 className="w-4 h-4" /> DEVELOPER MODE
             </div>
             <div className="flex items-center gap-2 shrink-0">
-            <button
-              onClick={handleAutoFix}
-              disabled={isFixing || !currentCode || currentCode.includes('// Your active')}
-              className="flex items-center gap-1 px-2 py-1 rounded-md border border-[#333333] text-[10px] font-medium tracking-wide text-[#888888] hover:text-white hover:border-[#555555] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-            >
-              {isFixing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wand2 className="w-3 h-3" />}
-              Auto-Fix
-            </button>
-            <div className="flex rounded-md border border-[#333333] overflow-hidden text-[10px] font-medium tracking-wide">
               <button
-                onClick={() => setDevView('code')}
-                className={`flex items-center gap-1 px-2.5 py-1 transition-colors ${
-                  devView === 'code' ? 'bg-[#222222] text-white' : 'text-[#666666] hover:text-[#aaaaaa]'
-                }`}
+                type="button"
+                onClick={copyCodeToClipboard}
+                className="flex items-center gap-1 px-2 py-1 rounded-md border border-[#333333] text-[10px] font-medium tracking-wide text-[#888888] hover:text-white hover:border-[#555555] transition-colors"
               >
-                <Code2 className="w-3 h-3" /> Code
+                <Copy className="w-3 h-3" /> {copySuccess ? 'Copied!' : 'Copy Code'}
               </button>
-              <button
-                onClick={() => setDevView('parametric')}
-                className={`flex items-center gap-1 px-2.5 py-1 border-l border-[#333333] transition-colors ${
-                  devView === 'parametric' ? 'bg-[#222222] text-white' : 'text-[#666666] hover:text-[#aaaaaa]'
-                }`}
-              >
-                <SlidersHorizontal className="w-3 h-3" /> Params
-                {compiling && (
-                  <Loader2 className="w-3 h-3 animate-spin text-blue-400 ml-0.5" />
-                )}
-              </button>
-            </div>
             </div>
           </div>
 
-          {devView === 'code' ? (
-            <textarea
-              value={currentCode}
-              onChange={(e) => {
-                setCurrentCode(e.target.value);
-                if (autoCompileOnChange) debouncedCompile();
-              }}
-              spellCheck={false}
-              className="w-full flex-grow min-h-0 bg-[#050505] border border-[#222222] rounded-lg p-4 font-mono text-[11px] leading-relaxed text-[#4ade80] resize-none focus:outline-none focus:ring-1 focus:ring-[#4ade80]/30 focus:border-[#4ade80]/40 transition-all selection:bg-[#4ade80]/20"
-            />
-          ) : (
-            <div className="w-full flex-grow min-h-0 bg-[#050505] border border-[#222222] rounded-lg overflow-y-auto">
-              {params.length === 0 ? (
-                <div className="h-full flex flex-col items-center justify-center text-[#555555] text-[11px] text-center px-6 gap-2">
-                  <SlidersHorizontal className="w-5 h-5 text-[#333333]" />
-                  <p>No parametric variables detected.</p>
-                  <p className="font-mono text-[#666666] text-[10px]">width = 20; // base width</p>
-                </div>
-              ) : (
-                <div className="divide-y divide-[#1a1a1a]">
-                  {params.map((param) => (
-                    <div key={param.name} className="px-4 py-3.5 flex flex-col gap-2.5 hover:bg-[#0a0a0a] transition-colors">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0 flex-1">
-                          <div className="text-[11px] font-mono font-medium text-[#e2e8f0] truncate">
-                            {param.name}
-                          </div>
-                          {param.label && (
-                            <div className="text-[10px] text-[#888888] mt-0.5 truncate">
-                              {param.label}
-                            </div>
-                          )}
-                        </div>
-                        <input
-                          type="number"
-                          min={param.min}
-                          max={param.max}
-                          step={param.step}
-                          value={param.value}
-                          onChange={(e) => handleParamChange(param.name, parseFloat(e.target.value))}
-                          className="w-[52px] shrink-0 bg-[#111111] border border-[#333333] rounded px-1.5 py-0.5 text-[11px] font-mono text-white text-right focus:outline-none focus:ring-1 focus:ring-white/20 focus:border-[#555555] transition-all tabular-nums"
-                        />
-                      </div>
-                      <input
-                        type="range"
-                        min={param.min}
-                        max={param.max}
-                        step={param.step}
-                        value={param.value}
-                        onChange={(e) => handleParamChange(param.name, parseFloat(e.target.value))}
-                        className="w-full h-[3px] bg-[#222222] rounded-full appearance-none cursor-pointer
-                          [&::-webkit-slider-runnable-track]:h-[3px] [&::-webkit-slider-runnable-track]:rounded-full [&::-webkit-slider-runnable-track]:bg-[#222222]
-                          [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:-mt-[4.5px] [&::-webkit-slider-thumb]:shadow-[0_0_6px_rgba(255,255,255,0.3)]
-                          [&::-moz-range-track]:h-[3px] [&::-moz-range-track]:rounded-full [&::-moz-range-track]:bg-[#222222]
-                          [&::-moz-range-thumb]:w-3 [&::-moz-range-thumb]:h-3 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-white [&::-moz-range-thumb]:border-0"
-                      />
-                      <div className="flex justify-between text-[9px] font-mono text-[#444444] tabular-nums">
-                        <span>{param.min}</span>
-                        <span>{param.max}</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
+          <textarea
+            value={currentCode}
+            onChange={(e) => {
+              setCurrentCode(e.target.value);
+              if (autoCompileOnChange) debouncedCompile();
+            }}
+            spellCheck={false}
+            className="w-full flex-grow min-h-0 bg-[#050505] border border-[#222222] rounded-lg p-4 font-mono text-[11px] leading-relaxed text-[#4ade80] resize-none focus:outline-none focus:ring-1 focus:ring-[#4ade80]/30 focus:border-[#4ade80]/40 transition-all selection:bg-[#4ade80]/20"
+          />
         </div>
       </aside>
       </div>
