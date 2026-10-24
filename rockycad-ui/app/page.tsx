@@ -1949,7 +1949,7 @@ export default function RockyCADStudio() {
                     className="flex items-center gap-1.5 bg-[#222222] hover:bg-[#333333] text-white px-3 py-1.5 rounded transition-colors"
                   >
                     <Download className="w-3.5 h-3.5" />
-                    Export Pack
+                    Export
                     <ChevronDown className="w-3.5 h-3.5" />
                   </button>
                   {isExportMenuOpen && (
