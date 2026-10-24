@@ -2010,7 +2010,7 @@ export default function RockyCADStudio() {
               <div
                 role="menu"
                 aria-label="Object actions"
-                className="fixed z-50 min-w-40 overflow-hidden rounded-lg border border-neutral-700 bg-gray-800 p-1.5 text-sm text-neutral-100 shadow-2xl"
+                className="fixed z-[100] min-w-40 overflow-hidden rounded-lg border border-neutral-700 bg-gray-800 p-1.5 text-sm text-neutral-100 shadow-2xl"
                 style={{ left: contextMenu.x, top: contextMenu.y }}
                 onClick={event => event.stopPropagation()}
               >
@@ -2215,7 +2215,7 @@ export default function RockyCADStudio() {
                 onChange={event => setCadCommand(event.target.value)}
                 aria-label="CAD command"
                 placeholder="Type a CAD command (e.g., BOX 40 40 10, CYL 15 50, HOLE 5 50, MOVE 10 0 0, DEL, CLEAR)..."
-                className="absolute bottom-4 left-4 right-4 bg-gray-950 border-2 border-green-500 text-green-400 drop-shadow-[0_0_8px_rgba(74,222,128,0.8)] placeholder-green-700 px-4 py-3 rounded-md font-mono z-[100] opacity-100"
+                className="absolute bottom-4 left-4 right-4 bg-gray-950 border-2 border-green-500 text-green-400 drop-shadow-[0_0_8px_rgba(74,222,128,0.8)] placeholder-green-700 px-4 py-3 rounded-md font-mono z-20 opacity-100"
               />
               {cadCommandStatus && <span role="status" className="absolute bottom-1 right-6 z-[101] hidden max-w-48 truncate text-[9px] text-[#999999] sm:inline">{cadCommandStatus}</span>}
             </form>
