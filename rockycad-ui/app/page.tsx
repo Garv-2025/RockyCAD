@@ -1939,30 +1939,28 @@ export default function RockyCADStudio() {
           <div className="flex justify-between items-center text-xs font-semibold tracking-widest text-[#888888] px-1 shrink-0">
             <span>STUDIO VIEWER</span>
             <div className="flex items-center gap-2">
-              {stlUrl && (
-                <div className="relative">
-                  <button
-                    type="button"
-                    onClick={() => setIsExportMenuOpen(open => !open)}
-                    aria-haspopup="menu"
-                    aria-expanded={isExportMenuOpen}
-                    className="flex items-center gap-1.5 bg-[#222222] hover:bg-[#333333] text-white px-3 py-1.5 rounded transition-colors"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    Export
-                    <ChevronDown className="w-3.5 h-3.5" />
-                  </button>
-                  {isExportMenuOpen && (
-                    <div role="menu" className="absolute right-0 top-full z-30 mt-2 w-64 rounded-lg border border-[#333333] bg-[#111111] p-1.5 text-left shadow-xl">
-                      <button type="button" role="menuitem" onClick={handleExportSTL} className="w-full rounded px-3 py-2 text-left text-xs text-[#cccccc] hover:bg-[#222222] hover:text-white">Download STL</button>
-                      <button type="button" role="menuitem" onClick={handleExportSCAD} className="w-full rounded px-3 py-2 text-left text-xs text-[#cccccc] hover:bg-[#222222] hover:text-white">Download SCAD source</button>
-                      <button type="button" role="menuitem" onClick={handleExportPack} disabled={!currentModelSpecs || isExportingPack} className="w-full rounded px-3 py-2 text-left text-xs text-[#cccccc] hover:bg-[#222222] hover:text-white disabled:cursor-not-allowed disabled:opacity-40">
-                        {isExportingPack ? 'Building manufacturing pack...' : 'Export Manufacturing Pack (.zip)'}
-                      </button>
-                    </div>
-                  )}
-                </div>
-              )}
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setIsExportMenuOpen(open => !open)}
+                  aria-haspopup="menu"
+                  aria-expanded={isExportMenuOpen}
+                  className="flex items-center gap-1.5 bg-[#222222] hover:bg-[#333333] text-white px-3 py-1.5 rounded transition-colors"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  Export
+                  <ChevronDown className="w-3.5 h-3.5" />
+                </button>
+                {isExportMenuOpen && (
+                  <div role="menu" className="absolute right-0 top-full z-30 mt-2 w-64 rounded-lg border border-[#333333] bg-[#111111] p-1.5 text-left shadow-xl">
+                    <button type="button" role="menuitem" onClick={handleExportSTL} disabled={!stlUrl} className="w-full rounded px-3 py-2 text-left text-xs text-[#cccccc] hover:bg-[#222222] hover:text-white disabled:cursor-not-allowed disabled:opacity-40">Export STL</button>
+                    <button type="button" role="menuitem" onClick={handleExportSCAD} className="w-full rounded px-3 py-2 text-left text-xs text-[#cccccc] hover:bg-[#222222] hover:text-white">Export SCAD</button>
+                    <button type="button" role="menuitem" onClick={handleExportPack} disabled={!currentModelSpecs || isExportingPack} className="w-full rounded px-3 py-2 text-left text-xs text-[#cccccc] hover:bg-[#222222] hover:text-white disabled:cursor-not-allowed disabled:opacity-40">
+                      {isExportingPack ? 'Building manufacturing pack...' : 'Export Manufacturing Pack (.zip)'}
+                    </button>
+                  </div>
+                )}
+              </div>
               <button 
                 onClick={() => handleCompile()}
                 disabled={compiling || !currentCode}
