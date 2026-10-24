@@ -4,6 +4,7 @@ import { Canvas, useLoader, type ThreeEvent } from '@react-three/fiber';
 import { OrbitControls, Environment, GizmoHelper, GizmoViewport, Html, Line, TransformControls, Edges, PerspectiveCamera } from '@react-three/drei';
 import { Geometry, Base, Subtraction, Addition } from '@react-three/csg';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
+import { STLExporter } from 'three-stdlib';
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type MutableRefObject, type PointerEvent as ReactPointerEvent, type ReactNode, type SetStateAction } from 'react';
 import * as THREE from 'three';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
@@ -153,6 +154,7 @@ interface STLViewerProps {
   autoOrientToken: number;
   parametricValues: Record<string, number>;
   compiledParamValues: Record<string, number>;
+  exportSTLRef: MutableRefObject<(() => Blob) | null>;
   onManufacturingSpecs: (specs: ManufacturingSpecs) => void;
 }
 
@@ -511,7 +513,7 @@ function SceneGroup({ object, selected, transformTarget, gizmoMode, snapDistance
   );
 }
 
-function STLModel({ url, isMeasureMode, setMeasurePoints, setHoverPoint, wireframe, showOverhangs, clipPlane, orientation, autoOrientToken, parametricValues, compiledParamValues, gizmoMode, snapDistance, onSelectObject, onMeshRef, onTransformDragging, onManufacturingSpecs, onOrientationOptimized, isSelected, lastMeshClickRef }: Omit<STLViewerProps, 'url' | 'sceneObjects' | 'pendingPasteObject' | 'selectedObjectIds' | 'show3DGrid' | 'showAxes' | 'onObjectContextMenu' | 'onSelectObjects' | 'onObjectDragStart' | 'onObjectDragEnd' | 'onPlacePendingObject' | 'onTransformObject' | 'measurePoints' | 'hoverPoint' | 'cameraResetToken' | 'autoOrientToken' | 'onManufacturingSpecs'> & {
+function STLModel({ url, isMeasureMode, setMeasurePoints, setHoverPoint, wireframe, showOverhangs, clipPlane, orientation, autoOrientToken, parametricValues, compiledParamValues, gizmoMode, snapDistance, onSelectObject, onMeshRef, onTransformDragging, onManufacturingSpecs, onOrientationOptimized, isSelected, lastMeshClickRef }: Omit<STLViewerProps, 'url' | 'sceneObjects' | 'pendingPasteObject' | 'selectedObjectIds' | 'show3DGrid' | 'showAxes' | 'exportSTLRef' | 'onObjectContextMenu' | 'onSelectObjects' | 'onObjectDragStart' | 'onObjectDragEnd' | 'onPlacePendingObject' | 'onTransformObject' | 'measurePoints' | 'hoverPoint' | 'cameraResetToken' | 'autoOrientToken' | 'onManufacturingSpecs'> & {
   url: string;
   clipPlane: THREE.Plane;
   orientation: Orientation;
@@ -672,12 +674,13 @@ function STLModel({ url, isMeasureMode, setMeasurePoints, setHoverPoint, wirefra
   );
 }
 
-export default function STLViewer({ url, sceneObjects, pendingPasteObject, selectedObjectIds, snapDistance, show3DGrid, showAxes, onSelectObject, onObjectContextMenu, onSelectObjects, onObjectDragStart, onObjectDragEnd, onPlacePendingObject, onTransformObject, gizmoMode, isMeasureMode, measurePoints, hoverPoint, setMeasurePoints, setHoverPoint, wireframe, showOverhangs, cameraResetToken, autoOrientToken, parametricValues, compiledParamValues, onManufacturingSpecs }: STLViewerProps) {
+export default function STLViewer({ url, sceneObjects, pendingPasteObject, selectedObjectIds, snapDistance, show3DGrid, showAxes, onSelectObject, onObjectContextMenu, onSelectObjects, onObjectDragStart, onObjectDragEnd, onPlacePendingObject, onTransformObject, gizmoMode, isMeasureMode, measurePoints, hoverPoint, setMeasurePoints, setHoverPoint, wireframe, showOverhangs, cameraResetToken, autoOrientToken, parametricValues, compiledParamValues, exportSTLRef, onManufacturingSpecs }: STLViewerProps) {
   const lastMeshClickRef = useRef(Number.NEGATIVE_INFINITY);
   const controlsRef = useRef<OrbitControlsImpl>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const canvasElementRef = useRef<HTMLCanvasElement | null>(null);
+  const exportGroupRef = useRef<THREE.Group>(null);
   const marqueePointerIdRef = useRef<number | null>(null);
   const [orbitEnabled, setOrbitEnabled] = useState(true);
   const [marquee, setMarquee] = useState({ startX: 0, startY: 0, currentX: 0, currentY: 0, active: false });
@@ -724,6 +727,30 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
     if (orientationToastTimeout.current) clearTimeout(orientationToastTimeout.current);
     orientationToastTimeout.current = setTimeout(() => setOrientationToast(null), 2800);
   }, []);
+
+  useEffect(() => {
+    exportSTLRef.current = () => {
+      const exportGroup = exportGroupRef.current;
+      if (!exportGroup) throw new Error('The 3D scene is not ready to export.');
+      exportGroup.updateWorldMatrix(true, true);
+      let hasRenderableMesh = false;
+      exportGroup.traverse(object => {
+        if (object instanceof THREE.Mesh && object.visible && object.geometry.getAttribute('position')?.count) {
+          hasRenderableMesh = true;
+        }
+      });
+      if (!hasRenderableMesh) throw new Error('There are no rendered meshes to export.');
+      const exporter = new STLExporter();
+      const result = exporter.parse(exportGroup, { binary: true });
+      const arrayBuffer = new ArrayBuffer(result.byteLength);
+      new Uint8Array(arrayBuffer).set(new Uint8Array(result.buffer, result.byteOffset, result.byteLength));
+      return new Blob([arrayBuffer], { type: 'model/stl' });
+    };
+
+    return () => {
+      exportSTLRef.current = null;
+    };
+  }, [exportSTLRef]);
 
   useEffect(() => () => {
     if (orientationToastTimeout.current) clearTimeout(orientationToastTimeout.current);
@@ -970,9 +997,10 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
         <directionalLight position={[20, 30, 20]} intensity={1.5} castShadow />
         
         <Suspense fallback={null}>
-          {url && sceneObjects.length === 0 && (
-            <group>
-              <group rotation={orientation}>
+          <group ref={exportGroupRef}>
+            {url && sceneObjects.length === 0 && (
+              <group>
+                <group rotation={orientation}>
                   <STLModel
                     key={url}
                     url={url}
@@ -996,10 +1024,10 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
                     onManufacturingSpecs={handleManufacturingSpecs}
                     onOrientationOptimized={handleOrientationOptimized}
                   />
+                </group>
               </group>
-            </group>
-          )}
-          {sceneObjects.map(object => {
+            )}
+            {sceneObjects.map(object => {
             const isSelected = selectedObjectIds.length === 1 && selectedObjectIds[0] === object.id;
             const sharedProps = {
               object,
@@ -1028,7 +1056,8 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
             return object.type === 'group'
               ? <SceneGroup key={object.id} {...sharedProps} />
               : <ScenePrimitive key={object.id} {...sharedProps} />;
-          })}
+            })}
+          </group>
           {pendingPasteObject && (
             <mesh
               ref={ghostMeshRef}

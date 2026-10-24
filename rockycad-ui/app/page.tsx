@@ -469,6 +469,7 @@ export default function RockyCADStudio() {
   const abortControllerRef = useRef<AbortController | null>(null);
   const currentCodeRef = useRef(currentCode);
   const sceneObjectsRef = useRef(sceneObjects);
+  const exportSTLRef = useRef<(() => Blob) | null>(null);
   const sceneWorkspaceProjectIdRef = useRef<string | null>(null);
   const sceneActionsRef = useRef<{
     deleteSelectedSceneObject: () => void;
@@ -1576,13 +1577,15 @@ export default function RockyCADStudio() {
     return response.blob();
   };
 
-  const handleExportSTL = async () => {
+  const handleExportSTL = () => {
     try {
-      const stlBlob = await getCompiledStlBlob();
+      const exportSceneSTL = exportSTLRef.current;
+      if (!exportSceneSTL) throw new Error('The 3D scene is not ready to export.');
+      const stlBlob = exportSceneSTL();
       downloadBlob(stlBlob, `rockycad-${getExportSlug()}.stl`);
       setIsExportMenuOpen(false);
     } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : 'Unable to export the compiled STL.';
+      const message = error instanceof Error ? error.message : 'Unable to export the rendered STL.';
       alert(`Export Error: ${message}`);
     }
   };
@@ -2007,6 +2010,7 @@ export default function RockyCADStudio() {
               autoOrientToken={autoOrientToken}
               parametricValues={parametricValues}
               compiledParamValues={compiledParamValues}
+              exportSTLRef={exportSTLRef}
               onManufacturingSpecs={handleManufacturingSpecs}
             />
             {contextMenu && (
