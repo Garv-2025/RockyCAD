@@ -1961,9 +1961,9 @@ export default function RockyCADStudio() {
                 </button>
                 {isExportMenuOpen && (
                   <div role="menu" className="absolute right-0 top-full z-30 mt-2 w-64 rounded-lg border border-[#333333] bg-[#111111] p-1.5 text-left shadow-xl">
-                    <button type="button" role="menuitem" onClick={handleExportSTL} disabled={!stlUrl} className="w-full rounded px-3 py-2 text-left text-xs text-[#cccccc] hover:bg-[#222222] hover:text-white disabled:cursor-not-allowed disabled:opacity-40">Export STL</button>
+                    <button type="button" role="menuitem" onClick={handleExportSTL} className="w-full rounded px-3 py-2 text-left text-xs text-[#cccccc] hover:bg-[#222222] hover:text-white">Export STL</button>
                     <button type="button" role="menuitem" onClick={handleExportSCAD} className="w-full rounded px-3 py-2 text-left text-xs text-[#cccccc] hover:bg-[#222222] hover:text-white">Export SCAD</button>
-                    <button type="button" role="menuitem" onClick={handleExportZip} disabled={!stlUrl || isExportingPack} className="w-full rounded px-3 py-2 text-left text-xs text-[#cccccc] hover:bg-[#222222] hover:text-white disabled:cursor-not-allowed disabled:opacity-40">
+                    <button type="button" role="menuitem" onClick={handleExportZip} className="w-full rounded px-3 py-2 text-left text-xs text-[#cccccc] hover:bg-[#222222] hover:text-white">
                       {isExportingPack ? 'Building manufacturing pack...' : 'Export Manufacturing Pack (.zip)'}
                     </button>
                   </div>
@@ -2330,7 +2330,7 @@ export default function RockyCADStudio() {
 
       {isSettingsOpen && (
         <div
-          className="bg-black/60 backdrop-blur-sm fixed inset-0 z-50 flex items-center justify-center"
+          className="bg-black/60 backdrop-blur-sm fixed inset-0 z-[9999] flex items-center justify-center"
           onClick={() => setIsSettingsOpen(false)}
         >
           <div
