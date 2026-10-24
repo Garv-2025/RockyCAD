@@ -1683,10 +1683,10 @@ export default function RockyCADStudio() {
   ]);
 
   return (
-    <main className="flex h-screen w-screen flex-col overflow-hidden bg-[#000000] text-[#f8fafc] font-sans md:flex-row">
+    <main className="flex flex-col lg:flex-row h-screen w-full overflow-hidden bg-[#000000] text-[#f8fafc] font-sans">
       
       {/* PANE 1: LEFT SIDEBAR (Library) */}
-      <aside className={`hidden shrink-0 flex-col h-full overflow-hidden bg-[#050505] transition-all duration-300 md:flex ${isStudioMinimized ? 'w-0 border-r-0 p-0 opacity-0' : 'w-[260px] border-r border-[#222222] p-4'}`}>
+      <aside className={`hidden shrink-0 flex-col h-full overflow-hidden bg-[#050505] transition-all duration-300 lg:flex ${isStudioMinimized ? 'w-0 border-r-0 p-0 opacity-0' : 'w-[260px] border-r border-[#222222] p-4'}`}>
         <button 
           onClick={createNewProject}
           className="flex items-center gap-2 bg-white text-black font-medium px-4 py-2.5 rounded-lg text-sm hover:bg-gray-200 transition-colors w-full justify-center mb-6"
@@ -1712,7 +1712,8 @@ export default function RockyCADStudio() {
                   </div>
                   <button 
                     onClick={(e) => deleteProject(session.id, e)}
-                    className="opacity-0 group-hover:opacity-100 hover:text-red-400 transition-opacity"
+                    aria-label={`Delete project ${session.title}`}
+                    className="flex h-8 w-8 items-center justify-center rounded-md bg-slate-800 p-2 font-sans text-red-400 opacity-100 transition-opacity hover:text-red-300 lg:opacity-0 lg:group-hover:opacity-100"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>
@@ -1750,13 +1751,13 @@ export default function RockyCADStudio() {
         </div>
       </aside>
 
-      <div ref={splitContainerRef} className="flex min-w-0 flex-1 flex-col overflow-hidden max-md:min-h-0 md:flex-row">
+      <div ref={splitContainerRef} className="flex w-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden lg:flex-row">
       {/* PANE 2: CENTER (Chat Assistant) */}
       <section
-        className="relative flex min-w-0 flex-col border-r border-[#222222] max-md:!flex-1 max-md:min-h-[40vh]"
+        className="relative flex w-full min-w-0 flex-col border-b border-[#222222] max-lg:!flex-1 max-lg:min-h-[40vh] lg:w-auto lg:border-b-0 lg:border-r"
         style={{ flex: isStudioMinimized ? '1 1 0%' : `0 0 ${chatWidth}%` }}
       >
-        <header className="h-14 shrink-0 border-b border-[#222222] flex items-center justify-between px-6 bg-[#000000]/80 backdrop-blur z-10">
+        <header className="z-10 flex h-14 shrink-0 items-center justify-between border-b border-[#222222] bg-[#000000]/80 px-4 backdrop-blur lg:px-6">
           <span className="text-sm font-medium tracking-tight text-[#888888]">
             RockyCAD <strong className="text-white">Assistant</strong>
           </span>
@@ -1773,14 +1774,14 @@ export default function RockyCADStudio() {
           )}
         </header>
 
-        <div className="flex-grow overflow-y-auto p-6 space-y-6 pb-28">
+        <div className="flex-grow space-y-6 overflow-y-auto p-4 pb-28 lg:p-6">
           {messages.map((msg, index) => (
             <div key={index} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
               <div className={`max-w-[90%] rounded-2xl px-5 py-3.5 text-sm leading-relaxed ${
                 msg.role === 'user' ? 'bg-[#222222] text-white' : 'bg-transparent text-[#cccccc] border border-[#333333]'
               }`}>
                 {editingIndex === index ? (
-                  <div className="flex flex-col gap-2 w-[350px]">
+                  <div className="flex w-full max-w-[350px] flex-col gap-2">
                     <textarea
                       value={editText}
                       onChange={(e) => setEditText(e.target.value)}
@@ -1865,7 +1866,7 @@ export default function RockyCADStudio() {
               disabled={loading}
               aria-label="Attach sketch image"
               title="Attach sketch image"
-              className="absolute left-2 top-2.5 rounded-lg p-2 text-[#888888] transition-colors hover:bg-[#222222] hover:text-white disabled:opacity-40"
+              className="absolute left-2 top-2.5 flex items-center justify-center rounded-lg bg-slate-800 p-2 font-sans text-white transition-colors hover:bg-slate-700 disabled:opacity-40"
             >
               <Paperclip className="h-4 w-4" />
             </button>
@@ -1879,11 +1880,11 @@ export default function RockyCADStudio() {
               className="w-full bg-[#111111] border border-[#333333] rounded-xl py-3.5 pl-12 pr-14 text-sm text-white placeholder-[#666666] focus:outline-none focus:border-white shadow-xl transition-all"
             />
             {loading ? (
-              <button onClick={handleStop} className="absolute right-3 top-2.5 bg-[#333333] hover:bg-[#444444] text-white p-2 rounded-lg transition-colors">
+              <button onClick={handleStop} className="absolute right-3 top-2.5 flex items-center justify-center rounded-lg bg-[#333333] p-2 font-sans text-white transition-colors hover:bg-[#444444]">
                 <Square className="w-4 h-4 fill-current" />
               </button>
             ) : (
-              <button onClick={() => handleGenerate(input)} disabled={!input.trim() && !selectedImage} aria-label="Send message" className="absolute right-3 top-2.5 bg-white hover:bg-gray-200 disabled:opacity-40 text-black p-2 rounded-lg transition-colors">
+              <button onClick={() => handleGenerate(input)} disabled={!input.trim() && !selectedImage} aria-label="Send message" className="absolute right-3 top-2.5 flex items-center justify-center rounded-lg bg-white p-2 font-sans text-black transition-colors hover:bg-gray-200 disabled:opacity-40">
                 <Send className="w-4 h-4" />
               </button>
             )}
@@ -1897,7 +1898,7 @@ export default function RockyCADStudio() {
           aria-orientation="vertical"
           aria-label="Resize chat and studio panels"
           onPointerDown={event => beginResize('columns', event)}
-          className="hidden w-1.5 shrink-0 cursor-col-resize bg-neutral-800 transition-colors hover:bg-blue-500 md:block"
+          className="hidden w-1.5 shrink-0 cursor-col-resize bg-neutral-800 transition-colors hover:bg-blue-500 lg:block"
         />
       )}
 
@@ -1905,7 +1906,7 @@ export default function RockyCADStudio() {
       <aside
         ref={studioPanelRef}
         id="studio-panel"
-        className={`h-full overflow-hidden flex flex-col bg-[#0a0a0a] gap-4 border-l border-[#222222] transition-all duration-300 ${isStudioExpanded ? 'fixed inset-0 z-40 w-screen border-l-0 p-4' : isStudioMinimized ? 'w-0 flex-none translate-x-full border-l-0 p-0 opacity-0 pointer-events-none max-md:fixed max-md:inset-0 max-md:z-40' : 'relative min-w-0 flex-1 p-4 max-md:h-auto max-md:min-h-[45vh]'}`}
+        className={`flex h-full flex-col gap-1 overflow-hidden border-t border-[#222222] bg-[#0a0a0a] p-2 transition-all duration-300 lg:gap-4 lg:border-l lg:border-t-0 lg:p-4 ${isStudioExpanded ? 'fixed inset-0 z-40 w-screen border-l-0' : isStudioMinimized ? 'w-0 flex-none translate-x-full border-l-0 p-0 opacity-0 pointer-events-none max-lg:fixed max-lg:inset-0 max-lg:z-40' : 'relative w-full min-w-0 flex-1 max-lg:h-auto max-lg:min-h-[50vh] lg:w-auto'}`}
       >
         <header className="flex h-8 shrink-0 items-center justify-between px-1 text-xs font-semibold tracking-widest text-[#888888]">
           <span>STUDIO WORKSPACE</span>
@@ -1938,7 +1939,7 @@ export default function RockyCADStudio() {
         </header>
         
         {/* Top Half: 3D Viewer */}
-        <div className="flex min-h-0 flex-col gap-2 max-md:min-h-[24vh]" style={{ flex: `0 0 ${viewerHeight}%` }}>
+        <div className="flex min-h-0 flex-col gap-2 max-lg:min-h-[18vh]" style={{ flex: `0 0 ${viewerHeight}%` }}>
           <div className="flex justify-between items-center text-xs font-semibold tracking-widest text-[#888888] px-1 shrink-0">
             <span>STUDIO VIEWER</span>
             <div className="flex items-center gap-2">
@@ -1948,7 +1949,7 @@ export default function RockyCADStudio() {
                   onClick={() => setIsExportMenuOpen(open => !open)}
                   aria-haspopup="menu"
                   aria-expanded={isExportMenuOpen}
-                  className="flex items-center gap-1.5 bg-[#222222] hover:bg-[#333333] text-white px-3 py-1.5 rounded transition-colors"
+                  className="flex items-center gap-1.5 rounded bg-[#222222] px-3 py-1.5 font-sans text-white transition-colors hover:bg-[#333333]"
                 >
                   <Download className="w-3.5 h-3.5" />
                   Export
@@ -1967,7 +1968,7 @@ export default function RockyCADStudio() {
               <button 
                 onClick={() => handleCompile()}
                 disabled={compiling || !currentCode}
-                className="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded disabled:opacity-40 disabled:bg-[#333333] transition-colors"
+                className="flex items-center gap-1.5 rounded bg-blue-600 px-3 py-1.5 font-sans text-white transition-colors hover:bg-blue-500 disabled:bg-[#333333] disabled:opacity-40"
               >
                 {compiling ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
                 {compiling ? 'Rendering...' : 'Compile & Render'}
@@ -2295,7 +2296,7 @@ export default function RockyCADStudio() {
         />
 
         {/* Bottom Half: Developer Code Mode */}
-        <div className="flex min-h-0 flex-1 flex-col gap-2 max-md:min-h-[20vh]">
+        <div className="flex min-h-0 flex-1 flex-col gap-2 max-lg:min-h-[16vh]">
           <div className="flex items-center justify-between px-1 pt-2 border-t border-[#222222] shrink-0 gap-2">
             <div className="flex items-center gap-2 text-xs font-semibold tracking-widest text-[#888888] shrink-0">
               <Code2 className="w-4 h-4" /> DEVELOPER MODE
