@@ -1596,24 +1596,16 @@ export default function RockyCADStudio() {
   };
 
   const handleExportZip = async () => {
-    if (!stlUrl || isExportingPack) return;
+    if (isExportingPack) return;
     setIsExportingPack(true);
     try {
+      const exportSceneSTL = exportSTLRef.current;
+      if (!exportSceneSTL) throw new Error('The 3D scene is not ready to export.');
       const zip = new JSZip();
-      zip.file('model.stl', await getCompiledStlBlob());
-      zip.file('source.scad', currentCode);
-      if (currentModelSpecs) {
-        zip.file('specs.json', JSON.stringify({
-          projectName: sessions.find(session => session.id === activeId)?.title ?? 'model',
-          dimensions_mm: currentModelSpecs.dimensions_mm,
-          volume_cm3: currentModelSpecs.volume_cm3,
-          weight_pla_grams: currentModelSpecs.weight_pla_grams,
-          estimated_cost_usd: currentModelSpecs.estimated_cost_usd,
-          exportedAt: new Date().toISOString(),
-        }, null, 2));
-      }
+      zip.file('model.stl', exportSceneSTL());
+      zip.file('model.scad', currentCode);
       const archive = await zip.generateAsync({ type: 'blob' });
-      downloadBlob(archive, `rockycad-${getExportSlug()}-manufacturing-pack.zip`);
+      downloadBlob(archive, 'RockyCAD_Manufacturing_Pack.zip');
       setIsExportMenuOpen(false);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Unable to create the manufacturing pack.';
