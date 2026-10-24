@@ -132,6 +132,8 @@ interface STLViewerProps {
   pendingPasteObject: SceneObject | null;
   selectedObjectIds: string[];
   snapDistance: number | null;
+  show3DGrid: boolean;
+  showAxes: boolean;
   onSelectObject: (id: string | null, shiftKey?: boolean) => void;
   onObjectContextMenu: (id: string, x: number, y: number) => void;
   onSelectObjects: (ids: string[]) => void;
@@ -509,7 +511,7 @@ function SceneGroup({ object, selected, transformTarget, gizmoMode, snapDistance
   );
 }
 
-function STLModel({ url, isMeasureMode, setMeasurePoints, setHoverPoint, wireframe, showOverhangs, clipPlane, orientation, autoOrientToken, parametricValues, compiledParamValues, gizmoMode, snapDistance, onSelectObject, onMeshRef, onTransformDragging, onManufacturingSpecs, onOrientationOptimized, isSelected, lastMeshClickRef }: Omit<STLViewerProps, 'url' | 'sceneObjects' | 'pendingPasteObject' | 'selectedObjectIds' | 'onObjectContextMenu' | 'onSelectObjects' | 'onObjectDragStart' | 'onObjectDragEnd' | 'onPlacePendingObject' | 'onTransformObject' | 'measurePoints' | 'hoverPoint' | 'cameraResetToken' | 'autoOrientToken' | 'onManufacturingSpecs'> & {
+function STLModel({ url, isMeasureMode, setMeasurePoints, setHoverPoint, wireframe, showOverhangs, clipPlane, orientation, autoOrientToken, parametricValues, compiledParamValues, gizmoMode, snapDistance, onSelectObject, onMeshRef, onTransformDragging, onManufacturingSpecs, onOrientationOptimized, isSelected, lastMeshClickRef }: Omit<STLViewerProps, 'url' | 'sceneObjects' | 'pendingPasteObject' | 'selectedObjectIds' | 'show3DGrid' | 'showAxes' | 'onObjectContextMenu' | 'onSelectObjects' | 'onObjectDragStart' | 'onObjectDragEnd' | 'onPlacePendingObject' | 'onTransformObject' | 'measurePoints' | 'hoverPoint' | 'cameraResetToken' | 'autoOrientToken' | 'onManufacturingSpecs'> & {
   url: string;
   clipPlane: THREE.Plane;
   orientation: Orientation;
@@ -670,7 +672,7 @@ function STLModel({ url, isMeasureMode, setMeasurePoints, setHoverPoint, wirefra
   );
 }
 
-export default function STLViewer({ url, sceneObjects, pendingPasteObject, selectedObjectIds, snapDistance, onSelectObject, onObjectContextMenu, onSelectObjects, onObjectDragStart, onObjectDragEnd, onPlacePendingObject, onTransformObject, gizmoMode, isMeasureMode, measurePoints, hoverPoint, setMeasurePoints, setHoverPoint, wireframe, showOverhangs, cameraResetToken, autoOrientToken, parametricValues, compiledParamValues, onManufacturingSpecs }: STLViewerProps) {
+export default function STLViewer({ url, sceneObjects, pendingPasteObject, selectedObjectIds, snapDistance, show3DGrid, showAxes, onSelectObject, onObjectContextMenu, onSelectObjects, onObjectDragStart, onObjectDragEnd, onPlacePendingObject, onTransformObject, gizmoMode, isMeasureMode, measurePoints, hoverPoint, setMeasurePoints, setHoverPoint, wireframe, showOverhangs, cameraResetToken, autoOrientToken, parametricValues, compiledParamValues, onManufacturingSpecs }: STLViewerProps) {
   const lastMeshClickRef = useRef(Number.NEGATIVE_INFINITY);
   const controlsRef = useRef<OrbitControlsImpl>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera>(null);
@@ -924,7 +926,7 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
           <planeGeometry args={[500, 500]} />
           <meshBasicMaterial color="#e0f2fe" transparent opacity={0.8} />
         </mesh>
-        <gridHelper args={[500, 50, '#444444', '#cccccc']} position={[0, 0, 0]} rotation={[Math.PI / 2, 0, 0]} />
+        {show3DGrid && <gridHelper args={[500, 50, '#444444', '#cccccc']} position={[0, 0, 0]} rotation={[Math.PI / 2, 0, 0]} />}
         {isMeasureMode && hoverPoint && (
           <mesh position={hoverPoint} renderOrder={5} raycast={() => {}}>
             <sphereGeometry args={[0.5, 16, 16]} />
@@ -1056,9 +1058,11 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
             RIGHT: THREE.MOUSE.ROTATE,
           }}
         />
-        <GizmoHelper alignment="bottom-right" margin={[80, 250]}>
-          <GizmoViewport />
-        </GizmoHelper>
+        {showAxes && (
+          <GizmoHelper alignment="bottom-right" margin={[80, 250]}>
+            <GizmoViewport />
+          </GizmoHelper>
+        )}
       </Canvas>
       {marquee.active && (
         <div

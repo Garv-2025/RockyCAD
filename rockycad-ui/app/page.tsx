@@ -447,7 +447,9 @@ export default function RockyCADStudio() {
   const [isShapeMenuOpen, setIsShapeMenuOpen] = useState(false);
   const [inspectorTab, setInspectorTab] = useState<'position' | 'dimensions'>('position');
   const [gizmoMode, setGizmoMode] = useState<'translate' | 'scale'>('translate');
-  const [snapDistance, setSnapDistance] = useState<number | null>(1);
+  const [gridSnapSize, setGridSnapSize] = useState<number | null>(1);
+  const [show3DGrid, setShow3DGrid] = useState(true);
+  const [showAxes, setShowAxes] = useState(true);
   const [clipboardObject, setClipboardObject] = useState<SceneObject | null>(null);
   const [pendingPasteObject, setPendingPasteObject] = useState<SceneObject | null>(null);
   const [cadCommand, setCadCommand] = useState('');
@@ -1567,16 +1569,22 @@ export default function RockyCADStudio() {
     window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
   };
 
-  const handleExportSTL = () => {
-    if (!stlUrl) return;
+  const getCompiledStlBlob = async () => {
+    if (!stlUrl) throw new Error('Compile a model before exporting its STL.');
+    const response = await fetch(stlUrl);
+    if (!response.ok) throw new Error('Could not read the compiled STL.');
+    return response.blob();
+  };
 
-    const link = document.createElement('a');
-    link.href = stlUrl;
-    link.download = `rockycad-${getExportSlug()}.stl`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    setIsExportMenuOpen(false);
+  const handleExportSTL = async () => {
+    try {
+      const stlBlob = await getCompiledStlBlob();
+      downloadBlob(stlBlob, `rockycad-${getExportSlug()}.stl`);
+      setIsExportMenuOpen(false);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unable to export the compiled STL.';
+      alert(`Export Error: ${message}`);
+    }
   };
 
   const handleExportSCAD = () => {
@@ -1584,23 +1592,23 @@ export default function RockyCADStudio() {
     setIsExportMenuOpen(false);
   };
 
-  const handleExportPack = async () => {
-    if (!stlUrl || !currentModelSpecs || isExportingPack) return;
+  const handleExportZip = async () => {
+    if (!stlUrl || isExportingPack) return;
     setIsExportingPack(true);
     try {
-      const stlResponse = await fetch(stlUrl);
-      if (!stlResponse.ok) throw new Error('Could not read the generated STL.');
       const zip = new JSZip();
-      zip.file('model.stl', await stlResponse.blob());
+      zip.file('model.stl', await getCompiledStlBlob());
       zip.file('source.scad', currentCode);
-      zip.file('specs.json', JSON.stringify({
-        projectName: sessions.find(session => session.id === activeId)?.title ?? 'model',
-        dimensions_mm: currentModelSpecs.dimensions_mm,
-        volume_cm3: currentModelSpecs.volume_cm3,
-        weight_pla_grams: currentModelSpecs.weight_pla_grams,
-        estimated_cost_usd: currentModelSpecs.estimated_cost_usd,
-        exportedAt: new Date().toISOString(),
-      }, null, 2));
+      if (currentModelSpecs) {
+        zip.file('specs.json', JSON.stringify({
+          projectName: sessions.find(session => session.id === activeId)?.title ?? 'model',
+          dimensions_mm: currentModelSpecs.dimensions_mm,
+          volume_cm3: currentModelSpecs.volume_cm3,
+          weight_pla_grams: currentModelSpecs.weight_pla_grams,
+          estimated_cost_usd: currentModelSpecs.estimated_cost_usd,
+          exportedAt: new Date().toISOString(),
+        }, null, 2));
+      }
       const archive = await zip.generateAsync({ type: 'blob' });
       downloadBlob(archive, `rockycad-${getExportSlug()}-manufacturing-pack.zip`);
       setIsExportMenuOpen(false);
@@ -1955,7 +1963,7 @@ export default function RockyCADStudio() {
                   <div role="menu" className="absolute right-0 top-full z-30 mt-2 w-64 rounded-lg border border-[#333333] bg-[#111111] p-1.5 text-left shadow-xl">
                     <button type="button" role="menuitem" onClick={handleExportSTL} disabled={!stlUrl} className="w-full rounded px-3 py-2 text-left text-xs text-[#cccccc] hover:bg-[#222222] hover:text-white disabled:cursor-not-allowed disabled:opacity-40">Export STL</button>
                     <button type="button" role="menuitem" onClick={handleExportSCAD} className="w-full rounded px-3 py-2 text-left text-xs text-[#cccccc] hover:bg-[#222222] hover:text-white">Export SCAD</button>
-                    <button type="button" role="menuitem" onClick={handleExportPack} disabled={!currentModelSpecs || isExportingPack} className="w-full rounded px-3 py-2 text-left text-xs text-[#cccccc] hover:bg-[#222222] hover:text-white disabled:cursor-not-allowed disabled:opacity-40">
+                    <button type="button" role="menuitem" onClick={handleExportZip} disabled={!stlUrl || isExportingPack} className="w-full rounded px-3 py-2 text-left text-xs text-[#cccccc] hover:bg-[#222222] hover:text-white disabled:cursor-not-allowed disabled:opacity-40">
                       {isExportingPack ? 'Building manufacturing pack...' : 'Export Manufacturing Pack (.zip)'}
                     </button>
                   </div>
@@ -1977,7 +1985,9 @@ export default function RockyCADStudio() {
               sceneObjects={sceneObjects}
               pendingPasteObject={pendingPasteObject}
               selectedObjectIds={selectedObjectIds}
-              snapDistance={snapDistance}
+              snapDistance={gridSnapSize}
+              show3DGrid={show3DGrid}
+              showAxes={showAxes}
               onSelectObject={handleSelectSceneObject}
               onObjectContextMenu={handleSceneObjectContextMenu}
               onSelectObjects={addSelectedSceneObjects}
@@ -2047,8 +2057,8 @@ export default function RockyCADStudio() {
               <button type="button" onClick={redoSceneChange} title="Redo (Ctrl+Y)" className="rounded px-2 py-1 text-[#cccccc] hover:bg-[#222222]">Redo</button>
               <span className="mx-1 h-4 w-px bg-[#333333]" />
               <span className="px-1 text-[#888888]">Snap</span>
-              {([1, 5, null] as const).map(value => (
-                <button key={value ?? 'off'} type="button" onClick={() => setSnapDistance(value)} aria-pressed={snapDistance === value} className={`rounded px-2 py-1 ${snapDistance === value ? 'bg-blue-500/20 text-blue-300' : 'text-[#aaaaaa] hover:bg-[#222222]'}`}>
+              {([1, 5, 10, null] as const).map(value => (
+                <button key={value ?? 'off'} type="button" onClick={() => setGridSnapSize(value)} aria-pressed={gridSnapSize === value} className={`rounded px-2 py-1 ${gridSnapSize === value ? 'bg-blue-500/20 text-blue-300' : 'text-[#aaaaaa] hover:bg-[#222222]'}`}>
                   {value === null ? 'Off' : `${value}mm`}
                 </button>
               ))}
@@ -2362,6 +2372,40 @@ export default function RockyCADStudio() {
                   type="checkbox"
                   checked={autoCompileOnChange}
                   onChange={(event) => setAutoCompileOnChange(event.target.checked)}
+                  className="h-4 w-4 accent-white"
+                />
+              </label>
+
+              <label className="flex items-center justify-between gap-4 text-sm text-[#cccccc]">
+                <span>Grid Snap Size</span>
+                <select
+                  value={gridSnapSize ?? 'off'}
+                  onChange={(event) => setGridSnapSize(event.target.value === 'off' ? null : Number(event.target.value))}
+                  className="bg-[#1a1a1a] border border-[#333333] rounded-md px-3 py-2 text-white focus:outline-none focus:border-[#666666]"
+                >
+                  <option value={1}>1mm</option>
+                  <option value={5}>5mm</option>
+                  <option value={10}>10mm</option>
+                  <option value="off">Off</option>
+                </select>
+              </label>
+
+              <label className="flex items-center justify-between gap-4 text-sm text-[#cccccc]">
+                <span>Show 3D Grid</span>
+                <input
+                  type="checkbox"
+                  checked={show3DGrid}
+                  onChange={(event) => setShow3DGrid(event.target.checked)}
+                  className="h-4 w-4 accent-white"
+                />
+              </label>
+
+              <label className="flex items-center justify-between gap-4 text-sm text-[#cccccc]">
+                <span>Show Axes</span>
+                <input
+                  type="checkbox"
+                  checked={showAxes}
+                  onChange={(event) => setShowAxes(event.target.checked)}
                   className="h-4 w-4 accent-white"
                 />
               </label>
