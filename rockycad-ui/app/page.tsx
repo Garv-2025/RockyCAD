@@ -843,7 +843,7 @@ export default function RockyCADStudio() {
     try {
       const res = await fetch("/api/chat", {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json',"ngrok-skip-browser-warning": "true" },
         body: JSON.stringify({ prompt: submittedPrompt, imageUrl, history: conversationHistory }),
         signal: abortController.signal,
       });
@@ -935,7 +935,7 @@ export default function RockyCADStudio() {
         try {
           const correctionResponse = await fetch(`${compileApiBaseUrl}/api/fix`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json',"ngrok-skip-browser-warning": "true"},
             body: JSON.stringify({ scad_code: code }),
           });
 
