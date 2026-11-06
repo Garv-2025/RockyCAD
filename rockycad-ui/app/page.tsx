@@ -13,6 +13,9 @@ import STLViewer, { type ManufacturingSpecs, type SceneObject } from '../compone
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+const compileApiBaseUrl = process.env.NODE_ENV === 'development'
+  ? 'http://localhost:8000'
+  : 'https://aftermath-pleading-small.ngrok-free.dev';
 
 function createSupabaseClient() {
   if (!supabaseUrl || !supabaseAnonKey) return null;
@@ -900,7 +903,7 @@ export default function RockyCADStudio() {
     try {
       let res: Response;
       try {
-        res = await fetch('/api/compile', {
+        res = await fetch(`${compileApiBaseUrl}/api/compile`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ scad_code: code }),
@@ -931,7 +934,7 @@ export default function RockyCADStudio() {
 
         setCompileStatus(`Agent self-correcting topology (Attempt ${retryCount + 1}/3)...`);
         try {
-          const correctionResponse = await fetch('/api/fix', {
+          const correctionResponse = await fetch(`${compileApiBaseUrl}/api/fix`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ scad_code: code }),

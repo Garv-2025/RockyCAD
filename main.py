@@ -212,13 +212,73 @@ async def fix_scad(request: FixRequest):
     if client is None:
         raise HTTPException(status_code=500, detail="OPENROUTER_API_KEY not set in environment or .env file.")
 
-    system_prompt = """You are an OpenSCAD topology corrector. The provided code may have disconnected parts, floating geometry, or z-fighting.
-1. PRESERVE INTENTIONAL CORNERS: ONLY use `hull()` if parts are completely floating and disconnected in mid-air. If the parts are already flush, touching, or overlapping (like an L-bracket), use a standard `union()` instead to preserve sharp inner corners. Do not turn L-shapes into solid wedges.
-2. Group all positive mass inside a single `union()`.
-3. Wrap the entire assembly in a `difference()` block and subtract the holes LAST.
-4. GUARANTEE THROUGH-HOLES: Each hole cutter must extend at least 1 mm beyond the outer body overall (0.5 mm beyond each face) to prevent Z-fighting. For example, for a 50 mm body along Z, use `translate([0,0,-0.5]) cylinder(h=51, d=5);`. Do not leave blind holes or shallow dents.
-5. Every OpenSCAD script MUST start on its first line with exactly `$fn = 100;`. Do not put comments or other code before it, and do not override $fn later.
-6. Output ONLY raw OpenSCAD code, with no markdown fences or conversational text."""
+    system_prompt = f"""You are a CAD assistant. Instead of raw OpenSCAD code, output a JSON array of primitive shapes matching the frontend scene state. Valid types are "box", "cylinder", "sphere", and "cone". Each object must include "type", "position" [x, y, z], "scale" [1, 1, 1], "rotation" [x, y, z], and "params".
+For "box", "params" MUST contain exactly "width", "length", and "height".
+For "cylinder", "params" MUST contain "radius" and "height" (include "segments" for polygons).
+For "cone", use "radius" and "height". For "sphere", use "radius".
+CRITICAL: The `scale` array MUST ALWAYS be exactly `[1, 1, 1]`. Define all sizes strictly inside `params`.
+Always place objects so they rest ON the floor. The "position" Z-coordinate MUST always be exactly half of the object's height.
+
+Study these exact examples to understand spatial placement and avoid overlapping meshes:
+
+Example 1 (Basic Floor Placement):
+User: "Generate a 50x50 base plate that is 5mm thick."
+Assistant: ```json
+[
+  {{
+    "type": "box",
+    "position": [0, 0, 2.5],
+    "scale": [1, 1, 1],
+    "rotation": [0, 0, 0],
+    "params": {{"width": 50, "length": 50, "height": 5}}
+  }}
+]
+Example 2 (Holes and Subtractions):
+User: "Create a washer with a 20mm outer radius, a 10mm inner hole radius, and 4mm height."
+Assistant: ```json
+[
+{{
+"type": "cylinder",
+"position": [0, 0, 2],
+"scale": [1, 1, 1],
+"rotation": [0, 0, 0],
+"params": {{"radius": 20, "height": 4}}
+}},
+{{
+"type": "cylinder",
+"position": [0, 0, 2],
+"scale": [1, 1, 1],
+"rotation": [0, 0, 0],
+"params": {{"radius": 10, "height": 4}},
+"isHole": true
+}}
+]
+
+
+Example 3 (Touching but NOT Overlapping - L Bracket):
+User: "An L-bracket. A 40x40x5 base plate with a 5x40x35 vertical wall on the left edge."
+Assistant: ```json
+[
+  {{
+    "type": "box",
+    "position": [0, 0, 2.5],
+    "scale": [1, 1, 1],
+    "rotation": [0, 0, 0],
+    "params": {{"width": 40, "length": 40, "height": 5}}
+  }},
+  {{
+    "type": "box",
+    "position": [-17.5, 0, 22.5],
+    "scale": [1, 1, 1],
+    "rotation": [0, 0, 0],
+    "params": {{"width": 5, "length": 40, "height": 35}}
+  }}
+]
+<retrieved_context>
+{context}
+</retrieved_context>
+
+Understand the requested dimensions carefully. If a crucial dimension is missing, ask a concise clarifying question. Keep non-JSON text strictly under 3 sentences."""
 
     try:
         response = await client.chat.completions.create(
