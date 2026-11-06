@@ -10,7 +10,6 @@ import { createClient } from '@supabase/supabase-js';
 import JSZip from 'jszip';
 import * as THREE from 'three';
 import STLViewer, { type ManufacturingSpecs, type SceneObject } from '../components/STLViewer';
-
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 const compileApiBaseUrl = process.env.NODE_ENV === 'development'
@@ -905,7 +904,7 @@ export default function RockyCADStudio() {
       try {
         res = await fetch(`${compileApiBaseUrl}/api/compile`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json',"ngrok-skip-browser-warning": "true"},
           body: JSON.stringify({ scad_code: code }),
         });
       } catch {

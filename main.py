@@ -20,18 +20,18 @@ import logging
 from typing import Literal
 from fastapi.middleware.cors import CORSMiddleware
 
+# Allow your Vercel frontend to talk to this backend
+
 logger = logging.getLogger(__name__)
 app = FastAPI(title="RockyCAD API")
-vector_store: FAISS | None = None
-
-# Whitelist the Next.js frontend to allow API requests
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["https://rocky-cad-yufs.vercel.app", "http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+vector_store: FAISS | None = None
 
 api_key = os.getenv("OPENROUTER_API_KEY")
 client = (
