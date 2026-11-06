@@ -458,7 +458,6 @@ export default function RockyCADStudio() {
   const [cadCommandStatus, setCadCommandStatus] = useState('');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [defaultFnResolution, setDefaultFnResolution] = useState(64);
-  const [autoCompileOnChange, setAutoCompileOnChange] = useState(true);
   const [isStudioExpanded, setIsStudioExpanded] = useState(false);
   const [isStudioMinimized, setIsStudioMinimized] = useState(false);
   const [isViewerToolbarMinimized, setIsViewerToolbarMinimized] = useState(false);
@@ -489,7 +488,6 @@ export default function RockyCADStudio() {
   const scenePreviewChangedRef = useRef(false);
   const undoHistoryRef = useRef<SceneObject[][]>([]);
   const redoHistoryRef = useRef<SceneObject[][]>([]);
-  const compileTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const compileRequestIdRef = useRef(0);
   const compileResetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const resizeStartRef = useRef<{ axis: 'columns' | 'rows'; position: number; ratio: number; size: number } | null>(null);
@@ -757,10 +755,8 @@ export default function RockyCADStudio() {
     };
   }, [activeResize]);
 
-  // Cleanup debounced compile on unmount
   useEffect(() => {
     return () => {
-      if (compileTimeoutRef.current) clearTimeout(compileTimeoutRef.current);
       if (compileResetTimeoutRef.current) clearTimeout(compileResetTimeoutRef.current);
     };
   }, []);
@@ -859,8 +855,6 @@ export default function RockyCADStudio() {
         if (newObjects.length > 0) {
           commitSceneObjects([...sceneObjectsRef.current, ...newObjects]);
           setSelectedObjectIds(newObjects.map(object => object.id));
-          if (stlUrl) URL.revokeObjectURL(stlUrl);
-          setStlUrl(null);
         }
       }
       const assistantContent = [
@@ -936,7 +930,7 @@ export default function RockyCADStudio() {
           const correctionResponse = await fetch(`${compileApiBaseUrl}/api/fix`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json',"ngrok-skip-browser-warning": "true"},
-            body: JSON.stringify({ scad_code: code }),
+            body: JSON.stringify({ scad_code: code, error: errorMessage }),
           });
 
           if (requestId !== compileRequestIdRef.current) return;
@@ -1097,11 +1091,10 @@ export default function RockyCADStudio() {
     sceneObjectsRef.current = updatedObjects;
     setSceneObjects(updatedObjects);
     setSelectedObjectIds(presetObjects.filter(object => object.operation === 'solid').map(object => object.id));
-    if (compileTimeoutRef.current) {
-      clearTimeout(compileTimeoutRef.current);
-      compileTimeoutRef.current = null;
+    if (stlUrl) {
+      URL.revokeObjectURL(stlUrl);
+      setStlUrl(null);
     }
-    void handleCompile(code);
   };
 
   const copyToClipboard = (text: string, index: number) => {
@@ -1120,21 +1113,12 @@ export default function RockyCADStudio() {
     }
   };
 
-  const debouncedCompile = (code: string = currentCodeRef.current) => {
-    if (compileTimeoutRef.current) clearTimeout(compileTimeoutRef.current);
-    compileTimeoutRef.current = setTimeout(() => {
-      void handleCompile(code);
-    }, 300);
-  };
-
-  const commitSceneObjects = (updatedObjects: SceneObject[], options: { compile?: boolean; recordHistory?: boolean } = {}) => {
-    const { compile = true, recordHistory = true } = options;
+  const commitSceneObjects = (updatedObjects: SceneObject[], options: { recordHistory?: boolean } = {}) => {
+    const { recordHistory = true } = options;
     const removesObjects = updatedObjects.length < sceneObjectsRef.current.length;
-    if (removesObjects || updatedObjects.length === 0) {
-      compileRequestIdRef.current += 1;
-      setCompiling(false);
-      setCompileStatus('');
-    }
+    compileRequestIdRef.current += 1;
+    setCompiling(false);
+    setCompileStatus('');
     if (recordHistory) {
       undoHistoryRef.current.push(sceneObjectsRef.current);
       redoHistoryRef.current = [];
@@ -1146,18 +1130,13 @@ export default function RockyCADStudio() {
     isSyncingFromSceneRef.current = updatedCode !== currentCodeRef.current;
     setCurrentCode(updatedCode);
     currentCodeRef.current = updatedCode;
-    if (updatedObjects.length === 0 && stlUrl) {
+    if (stlUrl) {
       URL.revokeObjectURL(stlUrl);
       setStlUrl(null);
     }
-    if (compile) debouncedCompile(updatedCode);
   };
 
   const handleObjectDragStart = () => {
-    if (compileTimeoutRef.current) {
-      clearTimeout(compileTimeoutRef.current);
-      compileTimeoutRef.current = null;
-    }
     dragStartObjectsRef.current = sceneObjectsRef.current;
     scenePreviewChangedRef.current = false;
   };
@@ -1175,10 +1154,6 @@ export default function RockyCADStudio() {
 
   const handleScenePreviewStart = () => {
     if (dragStartObjectsRef.current) return;
-    if (compileTimeoutRef.current) {
-      clearTimeout(compileTimeoutRef.current);
-      compileTimeoutRef.current = null;
-    }
     dragStartObjectsRef.current = sceneObjectsRef.current;
     scenePreviewChangedRef.current = false;
   };
@@ -2317,8 +2292,8 @@ export default function RockyCADStudio() {
           <textarea
             value={currentCode}
             onChange={(e) => {
+              currentCodeRef.current = e.target.value;
               setCurrentCode(e.target.value);
-              if (autoCompileOnChange) debouncedCompile();
             }}
             spellCheck={false}
             className="w-full flex-grow min-h-0 bg-[#050505] border border-[#222222] rounded-lg p-4 font-mono text-[11px] leading-relaxed text-[#4ade80] resize-none focus:outline-none focus:ring-1 focus:ring-[#4ade80]/30 focus:border-[#4ade80]/40 transition-all selection:bg-[#4ade80]/20"
@@ -2363,16 +2338,6 @@ export default function RockyCADStudio() {
                   <option value={64}>64</option>
                   <option value={128}>128</option>
                 </select>
-              </label>
-
-              <label className="flex items-center justify-between gap-4 text-sm text-[#cccccc]">
-                <span>Auto-compile on change</span>
-                <input
-                  type="checkbox"
-                  checked={autoCompileOnChange}
-                  onChange={(event) => setAutoCompileOnChange(event.target.checked)}
-                  className="h-4 w-4 accent-white"
-                />
               </label>
 
               <label className="flex items-center justify-between gap-4 text-sm text-[#cccccc]">

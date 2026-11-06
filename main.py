@@ -24,13 +24,6 @@ from fastapi.middleware.cors import CORSMiddleware
 
 logger = logging.getLogger(__name__)
 app = FastAPI(title="RockyCAD API")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["https://rocky-cad-yufs.vercel.app", "http://localhost:3000"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 vector_store: FAISS | None = None
 
 api_key = os.getenv("OPENROUTER_API_KEY")
@@ -96,6 +89,12 @@ def cleanup_files(*file_paths):
         except OSError:
             pass
 
+def write_scad_file(scad_code: str) -> str:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".scad", mode="w", encoding="utf-8") as scad_file:
+        scad_file.write(scad_code)
+        scad_file.flush()
+        return scad_file.name
+
 class ChatHistoryMessage(BaseModel):
     role: Literal["user", "assistant"]
     content: str
@@ -112,6 +111,7 @@ class CompileRequest(BaseModel):
 
 class FixRequest(BaseModel):
     scad_code: str
+    error: str | None = None
 
 @app.post("/api/generate")
 async def generate_scad(request: GenerateRequest):
@@ -210,77 +210,24 @@ Keep coordinate calculations strictly under 3 sentences before outputting the fi
 @app.post("/api/fix")
 async def fix_scad(request: FixRequest):
     if client is None:
-        raise HTTPException(status_code=500, detail="OPENROUTER_API_KEY not set in environment or .env file.")
-
-    system_prompt = f"""You are a CAD assistant. Instead of raw OpenSCAD code, output a JSON array of primitive shapes matching the frontend scene state. Valid types are "box", "cylinder", "sphere", and "cone". Each object must include "type", "position" [x, y, z], "scale" [1, 1, 1], "rotation" [x, y, z], and "params".
-For "box", "params" MUST contain exactly "width", "length", and "height".
-For "cylinder", "params" MUST contain "radius" and "height" (include "segments" for polygons).
-For "cone", use "radius" and "height". For "sphere", use "radius".
-CRITICAL: The `scale` array MUST ALWAYS be exactly `[1, 1, 1]`. Define all sizes strictly inside `params`.
-Always place objects so they rest ON the floor. The "position" Z-coordinate MUST always be exactly half of the object's height.
-
-Study these exact examples to understand spatial placement and avoid overlapping meshes:
-
-Example 1 (Basic Floor Placement):
-User: "Generate a 50x50 base plate that is 5mm thick."
-Assistant: ```json
-[
-  {{
-    "type": "box",
-    "position": [0, 0, 2.5],
-    "scale": [1, 1, 1],
-    "rotation": [0, 0, 0],
-    "params": {{"width": 50, "length": 50, "height": 5}}
-  }}
-]
-Example 2 (Holes and Subtractions):
-User: "Create a washer with a 20mm outer radius, a 10mm inner hole radius, and 4mm height."
-Assistant: ```json
-[
-{{
-"type": "cylinder",
-"position": [0, 0, 2],
-"scale": [1, 1, 1],
-"rotation": [0, 0, 0],
-"params": {{"radius": 20, "height": 4}}
-}},
-{{
-"type": "cylinder",
-"position": [0, 0, 2],
-"scale": [1, 1, 1],
-"rotation": [0, 0, 0],
-"params": {{"radius": 10, "height": 4}},
-"isHole": true
-}}
-]
-
-
-Example 3 (Touching but NOT Overlapping - L Bracket):
-User: "An L-bracket. A 40x40x5 base plate with a 5x40x35 vertical wall on the left edge."
-Assistant: ```json
-[
-  {{
-    "type": "box",
-    "position": [0, 0, 2.5],
-    "scale": [1, 1, 1],
-    "rotation": [0, 0, 0],
-    "params": {{"width": 40, "length": 40, "height": 5}}
-  }},
-  {{
-    "type": "box",
-    "position": [-17.5, 0, 22.5],
-    "scale": [1, 1, 1],
-    "rotation": [0, 0, 0],
-    "params": {{"width": 5, "length": 40, "height": 35}}
-  }}
-]
-<retrieved_context>
-{context}
-</retrieved_context>
-
-Understand the requested dimensions carefully. If a crucial dimension is missing, ask a concise clarifying question. Keep non-JSON text strictly under 3 sentences."""
+        raise HTTPException(status_code=503, detail="Auto-fix is unavailable because OPENROUTER_API_KEY is not configured.")
+    if vector_store is None:
+        raise HTTPException(status_code=503, detail="The CAD knowledge base is not initialized.")
 
     try:
+        context_documents = vector_store.similarity_search(request.scad_code, k=2)
+        context = "\n\n".join(document.page_content for document in context_documents)
+        compile_error = request.error or "OpenSCAD reported a compilation failure."
+        system_prompt = f"""You are an OpenSCAD debugging assistant. Correct the supplied OpenSCAD source while preserving its intended model and addressing the reported compiler error. Return only the complete corrected OpenSCAD source, without JSON or explanation.
+
+Compiler error:
+{compile_error}
+
+If the error says the top-level object is empty, the source must produce at least one actual 3D solid. Variables, comments, empty unions, and differences with no solid base do not produce a mesh.
+
+Relevant CAD guidance:
+{context}"""
+
         response = await client.chat.completions.create(
             model="openrouter/free",
             messages=[
@@ -300,11 +247,11 @@ Understand the requested dimensions carefully. If a crucial dimension is missing
 
         return {"scad_code": scad_code}
 
-    except Exception as e:
-        if isinstance(e, HTTPException):
-            raise
+    except HTTPException:
+        raise
+    except Exception as error:
         logger.exception("OpenRouter Auto-Fix failed")
-        raise HTTPException(status_code=502, detail=f"OpenRouter Auto-Fix error: {str(e)}")
+        raise HTTPException(status_code=502, detail=f"OpenRouter Auto-Fix error: {error}") from error
 
 @app.post("/api/compile")
 async def compile_scad(request: CompileRequest):
@@ -315,15 +262,15 @@ async def compile_scad(request: CompileRequest):
             detail="OpenSCAD executable not found. Make sure OpenSCAD is installed in 'C:\\Program Files\\OpenSCAD' or added to your PATH."
         )
 
+    if not request.scad_code.strip():
+        raise HTTPException(status_code=400, detail="OpenSCAD source is empty.")
+
     scad_path = None
     stl_path = None
 
     try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".scad", mode="w", encoding="utf-8") as scad_file:
-            scad_file.write(request.scad_code)
-            scad_path = scad_file.name
-
-        stl_path = scad_path.replace(".scad", ".stl")
+        scad_path = write_scad_file(request.scad_code)
+        stl_path = os.path.splitext(scad_path)[0] + ".stl"
 
         # Run OpenSCAD CLI to produce STL mesh
         result = subprocess.run(
@@ -334,8 +281,15 @@ async def compile_scad(request: CompileRequest):
         )
 
         if result.returncode != 0:
-            stderr_output = result.stderr.strip() or "Unknown compilation error."
-            raise HTTPException(status_code=400, detail=f"OpenSCAD compile failure: {stderr_output}")
+            output = "\n".join(part.strip() for part in (result.stderr, result.stdout) if part and part.strip())
+            if "current top level object is empty" in output.lower():
+                detail = (
+                    "OpenSCAD produced no 3D geometry. Add at least one solid primitive; "
+                    "an empty union or a difference without a solid base cannot produce an STL."
+                )
+            else:
+                detail = f"OpenSCAD compile failure: {output or 'Unknown compilation error.'}"
+            raise HTTPException(status_code=400, detail=detail)
 
         if not os.path.exists(stl_path) or os.path.getsize(stl_path) == 0:
             raise HTTPException(status_code=400, detail="OpenSCAD completed without producing a valid mesh file.")
@@ -348,18 +302,24 @@ async def compile_scad(request: CompileRequest):
         )
 
     except subprocess.TimeoutExpired:
-        if scad_path and os.path.exists(scad_path):
-            cleanup_files(scad_path)
+        cleanup_files(*(path for path in (scad_path, stl_path) if path))
         raise HTTPException(status_code=504, detail="OpenSCAD compilation timed out (exceeded 45 seconds).")
     except HTTPException:
-        if scad_path and os.path.exists(scad_path):
-            cleanup_files(scad_path)
+        cleanup_files(*(path for path in (scad_path, stl_path) if path))
         raise
     except Exception as e:
-        if scad_path and os.path.exists(scad_path):
-            cleanup_files(scad_path)
+        cleanup_files(*(path for path in (scad_path, stl_path) if path))
         raise HTTPException(status_code=500, detail=f"Server compiler error: {str(e)}")
 
 # Ensure static assets directory exists and mount UI
 os.makedirs("static", exist_ok=True)
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
+
+# Wrap the complete application so CORS headers are included on unhandled errors.
+app = CORSMiddleware(
+    app=app,
+    allow_origins=["https://rocky-cad-yufs.vercel.app", "http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)

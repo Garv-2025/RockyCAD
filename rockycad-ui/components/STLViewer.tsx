@@ -998,7 +998,7 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
         
         <Suspense fallback={null}>
           <group ref={exportGroupRef}>
-            {url && sceneObjects.length === 0 && (
+            {url && (
               <group>
                 <group rotation={orientation}>
                   <STLModel
@@ -1027,7 +1027,7 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
                 </group>
               </group>
             )}
-            {sceneObjects.map(object => {
+            {!url && sceneObjects.map(object => {
             const isSelected = selectedObjectIds.length === 1 && selectedObjectIds[0] === object.id;
             const sharedProps = {
               object,
@@ -1058,7 +1058,7 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
               : <ScenePrimitive key={object.id} {...sharedProps} />;
             })}
           </group>
-          {pendingPasteObject && (
+          {!url && pendingPasteObject && (
             <mesh
               ref={ghostMeshRef}
               position={pendingPasteObject.position}
@@ -1114,7 +1114,7 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
           {orientationToast}
         </div>
       )}
-      {url && sceneObjects.length === 0 && <>
+      {url && <>
       <div className="absolute bottom-14 left-4 z-10 w-48 rounded-xl border border-[#333333] bg-[#111111]/80 shadow-xl backdrop-blur-md transition-all duration-200">
         <button type="button" onClick={() => setIsSectionOpen(open => !open)} aria-expanded={isSectionOpen} className="flex w-full cursor-pointer items-center justify-between gap-3 rounded-xl p-2 text-left hover:bg-[#222222]">
           <span className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-[#888888]"><Layers className="h-4 w-4" />Z-Axis Cross Section</span>
