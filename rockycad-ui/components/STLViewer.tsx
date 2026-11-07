@@ -529,6 +529,16 @@ function STLModel({ url, isMeasureMode, setMeasurePoints, setHoverPoint, wirefra
 }) {
   const geom = useLoader(STLLoader, url);
   if (!geom.boundingBox) geom.computeBoundingBox();
+  const geometryCenter = useMemo(
+    () => geom.boundingBox?.getCenter(new THREE.Vector3()) ?? new THREE.Vector3(),
+    [geom],
+  );
+  const centeredGeometry = useMemo(() => {
+    const geometry = geom.clone();
+    geometry.translate(-geometryCenter.x, -geometryCenter.y, -geometryCenter.z);
+    geometry.computeBoundingBox();
+    return geometry;
+  }, [geom, geometryCenter]);
   const parametricScale = useMemo(
     () => getParametricPreviewScale(parametricValues, compiledParamValues),
     [compiledParamValues, parametricValues],
@@ -550,7 +560,7 @@ function STLModel({ url, isMeasureMode, setMeasurePoints, setHoverPoint, wirefra
   const overhangGeometry = useMemo(() => {
     if (!showOverhangs) return null;
 
-    const geometry = geom.index ? geom.toNonIndexed() : geom.clone();
+    const geometry = centeredGeometry.index ? centeredGeometry.toNonIndexed() : centeredGeometry.clone();
     const position = geometry.getAttribute('position');
     const colors = new Float32Array(position.count * 3);
     const safeColor = new THREE.Color('#444a54');
@@ -580,16 +590,21 @@ function STLModel({ url, isMeasureMode, setMeasurePoints, setHoverPoint, wirefra
     geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     geometry.computeBoundingBox();
     return geometry;
-  }, [geom, orientationMatrix, showOverhangs]);
+  }, [centeredGeometry, orientationMatrix, showOverhangs]);
   const meshRef = useRef<THREE.Mesh>(null);
   const [meshObject, setMeshObject] = useState<THREE.Mesh | null>(null);
+  const [pivotObject, setPivotObject] = useState<THREE.Group | null>(null);
   const attachMeshRef = useCallback((mesh: THREE.Mesh | null) => {
     meshRef.current = mesh;
     setMeshObject(mesh);
     onMeshRef('compiled-model', mesh);
   }, [onMeshRef]);
+  const attachPivotRef = useCallback((pivot: THREE.Group | null) => {
+    setPivotObject(pivot);
+  }, []);
   const processedAutoOrientToken = useRef(autoOrientToken);
 
+  useEffect(() => () => centeredGeometry.dispose(), [centeredGeometry]);
   useEffect(() => () => overhangGeometry?.dispose(), [overhangGeometry]);
 
   useEffect(() => {
@@ -638,32 +653,34 @@ function STLModel({ url, isMeasureMode, setMeasurePoints, setHoverPoint, wirefra
 
   return (
     <group scale={parametricScale}>
-      <mesh
-        ref={attachMeshRef}
-        geometry={overhangGeometry ?? geom}
-        castShadow
-        receiveShadow
-        onPointerMove={isMeasureMode ? handlePointerMove : undefined}
-        onPointerDown={event => {
-          event.stopPropagation();
-        }}
-        onClick={event => {
-          event.stopPropagation();
-          if (isMeasureMode) {
-            handlePointClick(event);
-          } else {
-            lastMeshClickRef.current = performance.now();
-            onSelectObject('compiled-model');
-          }
-        }}
-      >
+      <group ref={attachPivotRef} position={geometryCenter}>
+        <mesh
+          ref={attachMeshRef}
+          geometry={overhangGeometry ?? centeredGeometry}
+          castShadow
+          receiveShadow
+          onPointerMove={isMeasureMode ? handlePointerMove : undefined}
+          onPointerDown={event => {
+            event.stopPropagation();
+          }}
+          onClick={event => {
+            event.stopPropagation();
+            if (isMeasureMode) {
+              handlePointClick(event);
+            } else {
+              lastMeshClickRef.current = performance.now();
+              onSelectObject('compiled-model');
+            }
+          }}
+        >
           {/* Lightened the material to a bright aluminum so it pops against the dark grid */}
           <meshStandardMaterial color={showOverhangs ? '#ffffff' : wireframe ? '#00ffcc' : '#cccccc'} vertexColors={showOverhangs} wireframe={wireframe} roughness={0.4} metalness={0.3} side={THREE.DoubleSide} clippingPlanes={[clipPlane]} />
           {isSelected && <Edges geometry={meshObject?.geometry ?? overhangGeometry ?? geom} linewidth={2} threshold={15} color="cyan" />}
-      </mesh>
-      {isSelected && meshObject && !isMeasureMode && (
+        </mesh>
+      </group>
+      {isSelected && pivotObject && !isMeasureMode && (
         <TransformControls
-          object={meshObject}
+          object={pivotObject}
           mode={gizmoMode}
           translationSnap={snapDistance}
           onMouseDown={() => onTransformDragging(true)}
