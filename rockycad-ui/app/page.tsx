@@ -5,7 +5,7 @@ import Image from 'next/image';
 import ReactMarkdown from 'react-markdown';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
-import { Send, Square, Copy, Edit2, Play, Code2, Check, Loader2, MessageSquare, Plus, Trash2, Download, Box, User, Settings, X, Ruler, RotateCcw, ChevronDown, Paperclip, Maximize2, Minimize2, PanelRightClose, PanelRightOpen, Move, Scale } from 'lucide-react';
+import { Send, Square, Copy, Edit2, Play, Code2, Check, Loader2, MessageSquare, Plus, Trash2, Download, Box, User, Settings, X, Ruler, RotateCcw, RotateCw, ChevronDown, Paperclip, Maximize2, Minimize2, PanelRightClose, PanelRightOpen, Move, Scale } from 'lucide-react';
 import { createClient } from '@supabase/supabase-js';
 import JSZip from 'jszip';
 import * as THREE from 'three';
@@ -509,8 +509,9 @@ export default function RockyCADStudio() {
   const [isActionBarExpanded, setIsActionBarExpanded] = useState(false);
   const [isShapeInspectorOpen, setIsShapeInspectorOpen] = useState(false);
   const [dismissedInspectorSelectionId, setDismissedInspectorSelectionId] = useState<string | null>(null);
-  const [inspectorTab, setInspectorTab] = useState<'position' | 'dimensions'>('position');
-  const [gizmoMode, setGizmoMode] = useState<'translate' | 'scale'>('translate');
+  const [inspectorTab, setInspectorTab] = useState<'position' | 'dimensions' | 'rotation'>('position');
+  const [gizmoMode, setGizmoMode] = useState<'translate' | 'rotate' | 'scale'>('translate');
+  const [inspectorRotationPreview, setInspectorRotationPreview] = useState<{ objectId: string; axis: 'X' | 'Y' | 'Z'; startRotation: [number, number, number] } | null>(null);
   const [gridSnapSize, setGridSnapSize] = useState<number | null>(1);
   const [show3DGrid, setShow3DGrid] = useState(true);
   const [showAxes, setShowAxes] = useState(true);
@@ -1337,7 +1338,18 @@ export default function RockyCADStudio() {
     setContextMenu({ x, y, objectId });
   };
 
-  const handleContextMenuAction = (action: 'select' | 'clone' | 'mirrorX' | 'mirrorY' | 'delete') => {
+  const rotateSceneObject = (id: string, axis: number, degrees: number) => {
+    commitSceneObjects(sceneObjectsRef.current.map(object => object.id === id
+      ? {
+        ...object,
+        rotation: object.rotation.map((value, index) => index === axis
+          ? THREE.MathUtils.clamp(value * 180 / Math.PI + degrees, -360, 360) * Math.PI / 180
+          : value) as [number, number, number],
+      }
+      : object));
+  };
+
+  const handleContextMenuAction = (action: 'select' | 'clone' | 'mirrorX' | 'mirrorY' | 'delete' | 'rotateMode' | 'rotateX' | 'rotateY' | 'rotateZ') => {
     if (!contextMenu) return;
     const object = sceneObjectsRef.current.find(candidate => candidate.id === contextMenu.objectId);
     if (!object) {
@@ -1345,7 +1357,13 @@ export default function RockyCADStudio() {
       return;
     }
 
-    if (action === 'select') {
+    if (action === 'rotateMode') {
+      setGizmoMode('rotate');
+      setSelectedObjectIds([object.id]);
+    } else if (action === 'rotateX' || action === 'rotateY' || action === 'rotateZ') {
+      rotateSceneObject(object.id, action === 'rotateX' ? 0 : action === 'rotateY' ? 1 : 2, 90);
+      setSelectedObjectIds([object.id]);
+    } else if (action === 'select') {
       setSelectedObjectIds([object.id]);
     } else if (action === 'delete') {
       commitSceneObjects(sceneObjectsRef.current.filter(candidate => candidate.id !== object.id));
@@ -1543,6 +1561,23 @@ export default function RockyCADStudio() {
     };
 
     switch (command) {
+      case 'ROT':
+      case 'ROTATE':
+        if (!selected) break;
+        if (parts.length === 4 && values.every(Number.isFinite)) {
+          const rotation = values.map(value => THREE.MathUtils.clamp(value, -360, 360) * Math.PI / 180) as [number, number, number];
+          commitSceneObjects(sceneObjectsRef.current.map(object => object.id === selected.id ? { ...object, rotation } : object));
+          setCadCommandStatus(`Set ${selected.name} rotation to ${values.map(value => THREE.MathUtils.clamp(value, -360, 360)).join('°, ')}°.`);
+          return;
+        }
+        if (parts.length === 3 && ['X', 'Y', 'Z'].includes(parts[1]) && Number.isFinite(Number(parts[2]))) {
+          const axis = parts[1] === 'X' ? 0 : parts[1] === 'Y' ? 1 : 2;
+          const increment = Number(parts[2]);
+          rotateSceneObject(selected.id, axis, increment);
+          setCadCommandStatus(`Rotated ${selected.name} ${parts[1]} by ${increment}°.`);
+          return;
+        }
+        break;
       case 'BOX':
         if (values.length !== 3 || !validNumbers) break;
         spawnFromCommand('box', { x: values[0], y: values[1], z: values[2] });
@@ -1575,7 +1610,7 @@ export default function RockyCADStudio() {
         setCadCommandStatus('Build plate cleared.');
         return;
       default:
-        setCadCommandStatus('Unknown command. Use BOX, CYL, HOLE, SPHERE, MOVE, DEL, or CLEAR.');
+        setCadCommandStatus('Unknown command. Use BOX, CYL, HOLE, SPHERE, MOVE, ROT, DEL, or CLEAR.');
         return;
     }
 
@@ -1698,6 +1733,15 @@ export default function RockyCADStudio() {
         sceneActionsRef.current?.redoSceneChange();
       } else if (!event.ctrlKey && !event.metaKey && !event.altKey && selected) {
         switch (event.key.toLowerCase()) {
+          case 'r':
+            event.preventDefault();
+            setGizmoMode('rotate');
+            break;
+          case 'g':
+          case 'm':
+            event.preventDefault();
+            setGizmoMode('translate');
+            break;
           case 'd':
             event.preventDefault();
             sceneActionsRef.current?.dropSelectedToWorkplane();
@@ -1705,10 +1749,6 @@ export default function RockyCADStudio() {
           case 'h':
             event.preventDefault();
             sceneActionsRef.current?.setSelectedObjectOperation(selected.operation === 'solid' ? 'hole' : 'solid');
-            break;
-          case 'm':
-            event.preventDefault();
-            sceneActionsRef.current?.mirrorSelectedObject('x');
             break;
           case 'delete':
           case 'backspace':
@@ -2037,6 +2077,7 @@ export default function RockyCADStudio() {
               onPlacePendingObject={placePendingPasteObject}
               onTransformObject={handleSceneTransform}
               gizmoMode={gizmoMode}
+              inspectorRotationPreview={inspectorRotationPreview}
               isMeasureMode={isMeasuring}
               measurePoints={measurePoints}
               hoverPoint={hoverPoint}
@@ -2062,6 +2103,10 @@ export default function RockyCADStudio() {
                 {([
                   ['select', 'Select', 'text-neutral-100'],
                   ['clone', 'Clone', 'text-neutral-100'],
+                  ['rotateMode', 'Rotate Mode', 'text-blue-300'],
+                  ['rotateX', 'Rotate 90° X', 'text-neutral-100'],
+                  ['rotateY', 'Rotate 90° Y', 'text-neutral-100'],
+                  ['rotateZ', 'Rotate 90° Z', 'text-neutral-100'],
                   ['mirrorX', 'Mirror X', 'text-neutral-100'],
                   ['mirrorY', 'Mirror Y', 'text-neutral-100'],
                   ['delete', 'Delete', 'text-red-300'],
@@ -2179,9 +2224,10 @@ export default function RockyCADStudio() {
                     </button>
                   </div>
                 </div>
-                <div className="mb-3 grid grid-cols-2 gap-1" role="tablist" aria-label="Shape inspector sections">
+                <div className="mb-3 grid grid-cols-3 gap-1" role="tablist" aria-label="Shape inspector sections">
                   <button type="button" role="tab" aria-selected={inspectorTab === 'position'} onClick={() => setInspectorTab('position')} className={`rounded px-2 py-1.5 ${inspectorTab === 'position' ? 'bg-blue-500/20 text-blue-300' : 'bg-[#222222] text-[#aaaaaa]'}`}>Position</button>
                   <button type="button" role="tab" aria-selected={inspectorTab === 'dimensions'} onClick={() => setInspectorTab('dimensions')} className={`rounded px-2 py-1.5 ${inspectorTab === 'dimensions' ? 'bg-blue-500/20 text-blue-300' : 'bg-[#222222] text-[#aaaaaa]'}`}>Dimensions</button>
+                  <button type="button" role="tab" aria-selected={inspectorTab === 'rotation'} onClick={() => setInspectorTab('rotation')} className={`rounded px-2 py-1.5 ${inspectorTab === 'rotation' ? 'bg-blue-500/20 text-blue-300' : 'bg-[#222222] text-[#aaaaaa]'}`}>Rotation</button>
                 </div>
                 <div className="mb-3 grid grid-cols-2 gap-1">
                   <button type="button" onClick={() => setSelectedObjectOperation('solid')} aria-pressed={selectedSceneObject.operation === 'solid'} className={`rounded px-2 py-1.5 ${selectedSceneObject.operation === 'solid' ? 'bg-blue-500/20 text-blue-300' : 'bg-[#222222] text-[#aaaaaa]'}`}>Solid</button>
@@ -2238,7 +2284,7 @@ export default function RockyCADStudio() {
                       </div>
                     </label>
                   ))}
-                </div> : <div className="space-y-3">
+                </div> : inspectorTab === 'dimensions' ? <div className="space-y-3">
                   {selectedDimensionFields.map(field => {
                     const factor = field.factor ?? 1;
                     const value = (selectedSceneObject.params[field.key] ?? 0) / factor;
@@ -2289,6 +2335,104 @@ export default function RockyCADStudio() {
                       </label>
                     );
                   })}
+                </div> : <div className="space-y-3">
+                  {(['X', 'Y', 'Z'] as const).map((axis, index) => {
+                    const degrees = selectedSceneObject.rotation[index] * 180 / Math.PI;
+                    const axisName = ['Roll', 'Pitch', 'Yaw'][index];
+                    const setRotation = (nextDegrees: number, preview = false) => {
+                      const boundedDegrees = THREE.MathUtils.clamp(nextDegrees, -360, 360);
+                      const update = (object: SceneObject): SceneObject => ({
+                        ...object,
+                        rotation: object.rotation.map((radians, rotationAxis) =>
+                          rotationAxis === index ? boundedDegrees * Math.PI / 180 : radians,
+                        ) as [number, number, number],
+                      });
+                      if (preview) previewSelectedSceneObject(update);
+                      else updateSelectedSceneObject(update);
+                    };
+                    return (
+                      <div key={axis} className="space-y-1.5 rounded-lg border border-[#333333] bg-[#090909]/60 p-2">
+                        <div className="flex items-center justify-between text-[#aaaaaa]">
+                          <label htmlFor={`rotation-${axis}`} className="font-medium">{axis} ({axisName})</label>
+                          <div className="flex gap-1">
+                            <button type="button" onClick={() => setRotation(degrees - 15)} aria-label={`Rotate ${axis} counterclockwise 15 degrees`} className="rounded border border-[#333333] px-1.5 py-0.5 hover:bg-[#222222]">−15°</button>
+                            <button type="button" onClick={() => setRotation(degrees + 15)} aria-label={`Rotate ${axis} clockwise 15 degrees`} className="rounded border border-[#333333] px-1.5 py-0.5 hover:bg-[#222222]">+15°</button>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <input
+                            id={`rotation-${axis}`}
+                            type="number"
+                            min={-360}
+                            max={360}
+                            step="0.1"
+                            value={Number(degrees.toFixed(2))}
+                            onChange={event => {
+                              const value = Number(event.currentTarget.value);
+                              if (Number.isFinite(value)) setRotation(value);
+                            }}
+                            className="w-20 rounded border border-[#333333] bg-[#090909] px-1.5 py-1 text-right text-white"
+                          />
+                          <span className="text-[#777777]">°</span>
+                          <input
+                            type="range"
+                            min={-180}
+                            max={180}
+                            step={1}
+                            value={THREE.MathUtils.clamp(degrees, -180, 180)}
+                            aria-label={`Slide rotation ${axis}`}
+                            onPointerDown={() => {
+                              handleScenePreviewStart();
+                              setInspectorRotationPreview({
+                                objectId: selectedSceneObject.id,
+                                axis,
+                                startRotation: [...selectedSceneObject.rotation],
+                              });
+                            }}
+                            onPointerUp={() => {
+                              handleScenePreviewEnd();
+                              setInspectorRotationPreview(null);
+                            }}
+                            onPointerCancel={() => {
+                              handleScenePreviewEnd();
+                              setInspectorRotationPreview(null);
+                            }}
+                            onKeyDown={() => {
+                              handleScenePreviewStart();
+                              setInspectorRotationPreview({
+                                objectId: selectedSceneObject.id,
+                                axis,
+                                startRotation: [...selectedSceneObject.rotation],
+                              });
+                            }}
+                            onKeyUp={() => {
+                              handleScenePreviewEnd();
+                              setInspectorRotationPreview(null);
+                            }}
+                            onBlur={() => {
+                              handleScenePreviewEnd();
+                              setInspectorRotationPreview(null);
+                            }}
+                            onChange={event => setRotation(Number(event.currentTarget.value), true)}
+                            className="min-w-0 flex-1 accent-blue-500"
+                          />
+                        </div>
+                        <div className="grid grid-cols-7 gap-0.5">
+                          {[-90, -45, -15, 0, 15, 45, 90].map(snap => (
+                            <button
+                              key={snap}
+                              type="button"
+                              onClick={() => setRotation(snap)}
+                              aria-label={`Set ${axis} rotation to ${snap} degrees`}
+                              className={`rounded px-0.5 py-1 text-[9px] ${Math.abs(degrees - snap) < 0.05 ? 'bg-blue-500/20 text-blue-300' : 'bg-[#222222] text-[#aaaaaa] hover:bg-[#333333]'}`}
+                            >
+                              {snap > 0 ? `+${snap}` : snap}°
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>}
                 <div className="mt-3 grid grid-cols-2 gap-1">
                   <button type="button" onClick={duplicateSelectedSceneObject} title="Duplicate (Ctrl+D)" className="rounded bg-[#222222] px-2 py-1.5 text-[#cccccc] hover:bg-[#333333]">Duplicate</button>
@@ -2310,7 +2454,7 @@ export default function RockyCADStudio() {
                 value={cadCommand}
                 onChange={event => setCadCommand(event.target.value)}
                 aria-label="CAD command"
-                placeholder="Type a CAD command (e.g., BOX 40 40 10, CYL 15 50, HOLE 5 50, MOVE 10 0 0, DEL, CLEAR)..."
+                placeholder="Type a CAD command (e.g., BOX 40 40 10, CYL 15 50, HOLE 5 50, MOVE 10 0 0, ROT 0 0 45, DEL, CLEAR)..."
                 className="absolute bottom-4 left-4 right-4 bg-gray-950 border-2 border-green-500 text-green-400 drop-shadow-[0_0_8px_rgba(74,222,128,0.8)] placeholder-green-700 px-4 py-3 rounded-md font-mono z-20 opacity-100"
               />
               {cadCommandStatus && <span role="status" className="absolute bottom-1 right-6 z-[101] hidden max-w-48 truncate text-[9px] text-[#999999] sm:inline">{cadCommandStatus}</span>}
@@ -2358,6 +2502,16 @@ export default function RockyCADStudio() {
                     className={`p-1.5 rounded-md transition-colors ${gizmoMode === 'translate' ? 'bg-blue-500/20 text-blue-300' : 'text-[#aaaaaa] hover:bg-[#222222] hover:text-white'}`}
                   >
                     <Move className="w-4 h-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setGizmoMode(current => current === 'rotate' ? 'translate' : 'rotate')}
+                    aria-label="Rotate gizmo"
+                    aria-pressed={gizmoMode === 'rotate'}
+                    title="Rotate mode"
+                    className={`p-1.5 rounded-md transition-colors ${gizmoMode === 'rotate' ? 'bg-blue-500/20 text-blue-300' : 'text-[#aaaaaa] hover:bg-[#222222] hover:text-white'}`}
+                  >
+                    <RotateCw className="w-4 h-4" />
                   </button>
                   <button
                     type="button"

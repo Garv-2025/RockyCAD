@@ -1,6 +1,6 @@
 'use client';
 
-import { Canvas, useLoader, type ThreeEvent } from '@react-three/fiber';
+import { Canvas, useFrame, useLoader, type ThreeEvent } from '@react-three/fiber';
 import { OrbitControls, Environment, GizmoHelper, GizmoViewport, Html, Line, TransformControls, Edges, PerspectiveCamera } from '@react-three/drei';
 import { Geometry, Base, Subtraction, Addition } from '@react-three/csg';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
@@ -18,8 +18,109 @@ export interface ManufacturingSpecs {
 }
 
 type Orientation = [number, number, number];
-type GizmoMode = 'translate' | 'scale';
+type GizmoMode = 'translate' | 'rotate' | 'scale';
+type RotationAxis = 'X' | 'Y' | 'Z';
 const OVERHANG_DOT_THRESHOLD = 0.707;
+
+function getRotationSnap(snapDistance: number | null): number | undefined {
+  if (snapDistance === null) return undefined;
+  return snapDistance <= 1 ? THREE.MathUtils.degToRad(5)
+    : snapDistance <= 5 ? THREE.MathUtils.degToRad(15)
+      : THREE.MathUtils.degToRad(45);
+}
+
+function RotationFeedback({ object, axis, startRotation, color }: {
+  object: THREE.Object3D;
+  axis: RotationAxis | null;
+  startRotation: [number, number, number];
+  color: string;
+}) {
+  const [snapshot, setSnapshot] = useState<{ axis: RotationAxis; delta: number; total: number; startAngle: number; position: THREE.Vector3 }>({
+    axis: axis ?? 'Z',
+    delta: 0,
+    total: startRotation[2],
+    startAngle: startRotation[2],
+    position: new THREE.Vector3(),
+  });
+  const previousRef = useRef({ axis: axis ?? 'Z', deltaDegrees: Number.NaN });
+
+  useFrame(() => {
+    const currentRotation = object.rotation.toArray().slice(0, 3) as [number, number, number];
+    const differences = currentRotation.map((angle, index) => {
+      return Math.atan2(Math.sin(angle - startRotation[index]), Math.cos(angle - startRotation[index]));
+    });
+    const axisIndex = axis ? (axis === 'X' ? 0 : axis === 'Y' ? 1 : 2)
+      : differences.reduce((largest, difference, index) =>
+        Math.abs(difference) > Math.abs(differences[largest]) ? index : largest, 0);
+    const activeAxis = (['X', 'Y', 'Z'][axisIndex] as RotationAxis);
+    const delta = differences[axisIndex];
+    if (Math.abs(delta) < THREE.MathUtils.degToRad(0.1)) return;
+    const deltaDegrees = THREE.MathUtils.radToDeg(delta);
+    if (previousRef.current.axis === activeAxis && Math.abs(deltaDegrees - previousRef.current.deltaDegrees) < 0.1) return;
+    previousRef.current = { axis: activeAxis, deltaDegrees };
+    const currentAngle = currentRotation[axisIndex];
+    const position = object.getWorldPosition(new THREE.Vector3());
+    setSnapshot({
+      axis: activeAxis,
+      delta,
+      total: currentAngle,
+      startAngle: startRotation[axisIndex],
+      position,
+    });
+  });
+
+  const { baseline, tracking, sector } = useMemo(() => {
+    const displayAxis = snapshot.axis;
+    const axisVector = displayAxis === 'X' ? new THREE.Vector3(1, 0, 0)
+      : displayAxis === 'Y' ? new THREE.Vector3(0, 1, 0)
+        : new THREE.Vector3(0, 0, 1);
+    const reference = displayAxis === 'X' ? new THREE.Vector3(0, 1, 0)
+      : new THREE.Vector3(1, 0, 0);
+    const startVector = reference.clone().applyAxisAngle(axisVector, snapshot.startAngle).multiplyScalar(1.25);
+    const currentVector = startVector.clone().applyAxisAngle(axisVector, snapshot.delta);
+    const baseline = [snapshot.position, snapshot.position.clone().add(startVector)];
+    const tracking = [snapshot.position, snapshot.position.clone().add(currentVector)];
+    const points = [snapshot.position.clone()];
+    const steps = Math.max(8, Math.ceil(Math.abs(snapshot.delta) * 12));
+    for (let step = 0; step <= steps; step += 1) {
+      points.push(snapshot.position.clone().add(
+        startVector.clone().applyAxisAngle(axisVector, snapshot.delta * step / steps),
+      ));
+    }
+    const positions: number[] = [];
+    for (let index = 1; index < points.length - 1; index += 1) {
+      positions.push(
+        snapshot.position.x, snapshot.position.y, snapshot.position.z,
+        points[index].x, points[index].y, points[index].z,
+        points[index + 1].x, points[index + 1].y, points[index + 1].z,
+      );
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    return { baseline, tracking, sector: geometry };
+  }, [snapshot.axis, snapshot.delta, snapshot.position, snapshot.startAngle]);
+
+  useEffect(() => () => sector.dispose(), [sector]);
+  const feedbackColor = axis === null
+    ? snapshot.axis === 'X' ? '#ef4444' : snapshot.axis === 'Y' ? '#22c55e' : '#3b82f6'
+    : color;
+
+  return (
+    <group>
+      <Line points={baseline} color={feedbackColor} dashed dashSize={0.12} gapSize={0.08} lineWidth={1} />
+      <Line points={tracking} color={feedbackColor} lineWidth={2} />
+      <mesh geometry={sector}>
+        <meshBasicMaterial color={feedbackColor} transparent opacity={0.18} side={THREE.DoubleSide} depthWrite={false} />
+      </mesh>
+      <Html position={snapshot.position.clone().add(new THREE.Vector3(0.65, 0.65, 0.65))} center style={{ pointerEvents: 'none' }}>
+        <div className="whitespace-nowrap rounded-md border border-white/15 bg-[#111827]/95 px-2.5 py-1.5 font-mono text-[11px] text-white shadow-xl">
+          Axis: {snapshot.axis} | Δ {snapshot.delta >= 0 ? '+' : ''}{THREE.MathUtils.radToDeg(snapshot.delta).toFixed(1)}°
+          {' '} (Total: {THREE.MathUtils.radToDeg(snapshot.total).toFixed(1)}°)
+        </div>
+      </Html>
+    </group>
+  );
+}
 
 export interface SceneObject {
   id: string;
@@ -143,6 +244,7 @@ interface STLViewerProps {
   onPlacePendingObject: (position: [number, number, number]) => void;
   onTransformObject: (id: string, position: [number, number, number], rotation: [number, number, number], scale: [number, number, number]) => void;
   gizmoMode: GizmoMode;
+  inspectorRotationPreview: { objectId: string; axis: RotationAxis; startRotation: [number, number, number] } | null;
   isMeasureMode: boolean;
   measurePoints: THREE.Vector3[];
   hoverPoint: THREE.Vector3 | null;
@@ -276,6 +378,7 @@ function ScenePrimitive({ object, selected, transformTarget, gizmoMode, snapDist
 }) {
   const meshRef = useRef<THREE.Mesh>(null);
   const [meshObject, setMeshObject] = useState<THREE.Mesh | null>(null);
+  const [rotationPreview, setRotationPreview] = useState<[number, number, number] | null>(null);
   const attachMeshRef = useCallback((mesh: THREE.Mesh | null) => {
     meshRef.current = mesh;
     onMeshRef(object.id, mesh);
@@ -311,7 +414,11 @@ function ScenePrimitive({ object, selected, transformTarget, gizmoMode, snapDist
 
   const handleTransformEnd = () => {
     const mesh = meshRef.current;
-    if (!mesh) return;
+    setRotationPreview(null);
+    if (!mesh) {
+      onTransformDragging(false);
+      return;
+    }
     const clampedZ = clampMeshAboveWorkplane(mesh);
     onTransformObject(
       object.id,
@@ -365,15 +472,29 @@ function ScenePrimitive({ object, selected, transformTarget, gizmoMode, snapDist
         />
         {selected && <Edges linewidth={2} threshold={15} color="cyan" />}
       </mesh>
+      {rotationPreview && meshObject && (
+        <RotationFeedback
+          object={meshObject}
+          axis={null}
+          startRotation={rotationPreview}
+          color="#3b82f6"
+        />
+      )}
       {transformTarget && meshObject && !isMeasureMode && (
         <TransformControls
           object={meshObject}
           mode={gizmoMode}
           translationSnap={snapDistance}
+          rotationSnap={getRotationSnap(snapDistance)}
           onObjectChange={() => {
             if (meshRef.current) clampMeshAboveWorkplane(meshRef.current);
           }}
-          onMouseDown={() => onTransformDragging(true)}
+          onMouseDown={() => {
+            if (gizmoMode === 'rotate' && meshRef.current) {
+              setRotationPreview(meshRef.current.rotation.toArray().slice(0, 3) as [number, number, number]);
+            }
+            onTransformDragging(true);
+          }}
           onMouseUp={handleTransformEnd}
         />
       )}
@@ -421,6 +542,7 @@ function SceneGroup({ object, selected, transformTarget, gizmoMode, snapDistance
 }) {
   const groupRef = useRef<THREE.Mesh>(null);
   const [groupObject, setGroupObject] = useState<THREE.Mesh | null>(null);
+  const [rotationPreview, setRotationPreview] = useState<[number, number, number] | null>(null);
   const attachGroupRef = useCallback((mesh: THREE.Mesh | null) => {
     groupRef.current = mesh;
     onMeshRef(object.id, mesh);
@@ -510,18 +632,36 @@ function SceneGroup({ object, selected, transformTarget, gizmoMode, snapDistance
         />
         {selected && <Edges linewidth={2} threshold={15} color="cyan" />}
       </mesh>
+      {rotationPreview && groupObject && (
+        <RotationFeedback
+          object={groupObject}
+          axis={null}
+          startRotation={rotationPreview}
+          color="#3b82f6"
+        />
+      )}
       {transformTarget && groupObject && !isMeasureMode && (
         <TransformControls
           object={groupObject}
           mode={gizmoMode}
           translationSnap={snapDistance}
+          rotationSnap={getRotationSnap(snapDistance)}
           onObjectChange={() => {
             if (groupRef.current) clampMeshAboveWorkplane(groupRef.current);
           }}
-          onMouseDown={() => onTransformDragging(true)}
+          onMouseDown={() => {
+            if (gizmoMode === 'rotate' && groupRef.current) {
+              setRotationPreview(groupRef.current.rotation.toArray().slice(0, 3) as [number, number, number]);
+            }
+            onTransformDragging(true);
+          }}
           onMouseUp={() => {
+            setRotationPreview(null);
             const group = groupRef.current;
-            if (!group) return;
+            if (!group) {
+              onTransformDragging(false);
+              return;
+            }
             const clampedZ = clampMeshAboveWorkplane(group);
             onTransformObject(
               object.id,
@@ -537,7 +677,7 @@ function SceneGroup({ object, selected, transformTarget, gizmoMode, snapDistance
   );
 }
 
-function STLModel({ url, isMeasureMode, setMeasurePoints, setHoverPoint, wireframe, showOverhangs, clipPlane, orientation, autoOrientToken, parametricValues, compiledParamValues, gizmoMode, snapDistance, onSelectObject, onMeshRef, onTransformDragging, onManufacturingSpecs, onOrientationOptimized, isSelected, lastMeshClickRef }: Omit<STLViewerProps, 'url' | 'sceneObjects' | 'pendingPasteObject' | 'selectedObjectIds' | 'show3DGrid' | 'showAxes' | 'exportSTLRef' | 'onObjectContextMenu' | 'onSelectObjects' | 'onObjectDragStart' | 'onObjectDragEnd' | 'onPlacePendingObject' | 'onTransformObject' | 'measurePoints' | 'hoverPoint' | 'cameraResetToken' | 'autoOrientToken' | 'onManufacturingSpecs'> & {
+function STLModel({ url, isMeasureMode, setMeasurePoints, setHoverPoint, wireframe, showOverhangs, clipPlane, orientation, autoOrientToken, parametricValues, compiledParamValues, gizmoMode, snapDistance, onSelectObject, onMeshRef, onTransformDragging, onManufacturingSpecs, onOrientationOptimized, isSelected, lastMeshClickRef }: Omit<STLViewerProps, 'url' | 'sceneObjects' | 'pendingPasteObject' | 'selectedObjectIds' | 'show3DGrid' | 'showAxes' | 'exportSTLRef' | 'onObjectContextMenu' | 'onSelectObjects' | 'onObjectDragStart' | 'onObjectDragEnd' | 'onPlacePendingObject' | 'onTransformObject' | 'measurePoints' | 'hoverPoint' | 'cameraResetToken' | 'autoOrientToken' | 'onManufacturingSpecs' | 'inspectorRotationPreview'> & {
   url: string;
   clipPlane: THREE.Plane;
   orientation: Orientation;
@@ -645,6 +785,7 @@ function STLModel({ url, isMeasureMode, setMeasurePoints, setHoverPoint, wirefra
   }, [geom, orientationMatrix, showOverhangs]);
   const meshRef = useRef<THREE.Mesh>(null);
   const [meshObject, setMeshObject] = useState<THREE.Mesh | null>(null);
+  const [rotationPreview, setRotationPreview] = useState<[number, number, number] | null>(null);
   const attachMeshRef = useCallback((mesh: THREE.Mesh | null) => {
     meshRef.current = mesh;
     if (mesh) mesh.position.copy(initialPosition);
@@ -726,16 +867,31 @@ function STLModel({ url, isMeasureMode, setMeasurePoints, setHoverPoint, wirefra
           <meshStandardMaterial color={showOverhangs ? '#ffffff' : wireframe ? '#00ffcc' : '#cccccc'} vertexColors={showOverhangs} wireframe={wireframe} roughness={0.4} metalness={0.3} side={THREE.DoubleSide} clippingPlanes={[clipPlane]} />
           {isSelected && <Edges geometry={meshObject?.geometry ?? overhangGeometry ?? geom} linewidth={2} threshold={15} color="cyan" />}
       </mesh>
-      {isSelected && meshObject && !isMeasureMode && (
-        <TransformControls
+          {rotationPreview && meshObject && (
+            <RotationFeedback
           object={meshObject}
-          mode={gizmoMode}
-          translationSnap={snapDistance}
+              axis={null}
+              startRotation={rotationPreview}
+              color="#3b82f6"
+            />
+          )}
+          {isSelected && meshObject && !isMeasureMode && (
+            <TransformControls
+              object={meshObject}
+              mode={gizmoMode}
+              translationSnap={snapDistance}
+              rotationSnap={getRotationSnap(snapDistance)}
           onObjectChange={() => {
             if (meshRef.current) clampMeshAboveWorkplane(meshRef.current);
           }}
-          onMouseDown={() => onTransformDragging(true)}
+          onMouseDown={() => {
+            if (gizmoMode === 'rotate' && meshRef.current) {
+              setRotationPreview(meshRef.current.rotation.toArray().slice(0, 3) as [number, number, number]);
+            }
+            onTransformDragging(true);
+          }}
           onMouseUp={() => {
+            setRotationPreview(null);
             if (meshRef.current) clampMeshAboveWorkplane(meshRef.current);
             onTransformDragging(false);
           }}
@@ -745,7 +901,7 @@ function STLModel({ url, isMeasureMode, setMeasurePoints, setHoverPoint, wirefra
   );
 }
 
-export default function STLViewer({ url, sceneObjects, pendingPasteObject, selectedObjectIds, snapDistance, show3DGrid, showAxes, onSelectObject, onObjectContextMenu, onSelectObjects, onObjectDragStart, onObjectDragEnd, onPlacePendingObject, onTransformObject, gizmoMode, isMeasureMode, measurePoints, hoverPoint, setMeasurePoints, setHoverPoint, wireframe, showOverhangs, cameraResetToken, autoOrientToken, parametricValues, compiledParamValues, exportSTLRef, onManufacturingSpecs }: STLViewerProps) {
+export default function STLViewer({ url, sceneObjects, pendingPasteObject, selectedObjectIds, snapDistance, show3DGrid, showAxes, onSelectObject, onObjectContextMenu, onSelectObjects, onObjectDragStart, onObjectDragEnd, onPlacePendingObject, onTransformObject, gizmoMode, inspectorRotationPreview, isMeasureMode, measurePoints, hoverPoint, setMeasurePoints, setHoverPoint, wireframe, showOverhangs, cameraResetToken, autoOrientToken, parametricValues, compiledParamValues, exportSTLRef, onManufacturingSpecs }: STLViewerProps) {
   const lastMeshClickRef = useRef(Number.NEGATIVE_INFINITY);
   const controlsRef = useRef<OrbitControlsImpl>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera>(null);
@@ -764,6 +920,16 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
   const meshRefs = useRef<Record<string, THREE.Object3D>>({});
   const ghostMeshRef = useRef<THREE.Mesh>(null);
   const dragOffsetRef = useRef(new THREE.Vector3());
+  const inspectorFeedbackObject = useMemo(() => {
+    if (!inspectorRotationPreview) return null;
+    const sceneObject = sceneObjects.find(object => object.id === inspectorRotationPreview.objectId);
+    if (!sceneObject) return null;
+    const target = new THREE.Object3D();
+    target.position.fromArray(sceneObject.position);
+    target.rotation.fromArray(sceneObject.rotation);
+    target.updateMatrixWorld(true);
+    return target;
+  }, [inspectorRotationPreview, sceneObjects]);
   const [clipValue, setClipValue] = useState(100);
   const [isSectionOpen, setIsSectionOpen] = useState(false);
   const [isSpecsOpen, setIsSpecsOpen] = useState(true);
@@ -1180,6 +1346,14 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
           )}
           <Environment preset="city" />
         </Suspense>
+        {inspectorRotationPreview && inspectorFeedbackObject && (
+          <RotationFeedback
+            object={inspectorFeedbackObject}
+            axis={inspectorRotationPreview.axis}
+            startRotation={inspectorRotationPreview.startRotation}
+            color={inspectorRotationPreview.axis === 'X' ? '#ef4444' : inspectorRotationPreview.axis === 'Y' ? '#22c55e' : '#3b82f6'}
+          />
+        )}
         
         <OrbitControls
           ref={controlsRef}
@@ -1213,7 +1387,7 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
         />
       )}
 
-      <div className="absolute top-3 left-3 text-[10px] font-bold tracking-widest text-[#aaaaaa] bg-[#000000]/60 px-2 py-1 rounded backdrop-blur border border-[#333333]">
+      <div className="absolute left-1/2 top-3 z-10 -translate-x-1/2 rounded-full border border-[#333333]/70 bg-[#000000]/40 px-2 py-0.5 text-[10px] font-medium tracking-wide text-[#aaaaaa]/90 backdrop-blur-sm">
         STUDIO SPACE (X: Red, Y: Green, Z: Blue)
       </div>
       {orientationToast && (
