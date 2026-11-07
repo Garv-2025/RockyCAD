@@ -469,6 +469,7 @@ export default function RockyCADStudio() {
   const imageInputRef = useRef<HTMLInputElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const currentCodeRef = useRef(currentCode);
+  const handleCompileRef = useRef<((code?: string, retryCount?: number) => Promise<void>) | null>(null);
   const sceneObjectsRef = useRef(sceneObjects);
   const exportSTLRef = useRef<(() => Blob) | null>(null);
   const sceneWorkspaceProjectIdRef = useRef<string | null>(null);
@@ -494,6 +495,7 @@ export default function RockyCADStudio() {
   const splitContainerRef = useRef<HTMLDivElement>(null);
   const studioPanelRef = useRef<HTMLElement>(null);
   const projectsLoadedRef = useRef(false);
+  const initialModelRestoreRef = useRef(false);
   const currentModelSpecs = modelSpecs?.url === stlUrl ? modelSpecs.specs : null;
 
   useEffect(() => {
@@ -608,7 +610,7 @@ export default function RockyCADStudio() {
         let timeoutId: ReturnType<typeof setTimeout> | undefined;
         try {
           const result = await Promise.race([
-            supabase.from('projects').select('id, title, scad_code, messages'),
+            supabase.from('projects').select('id, title, scad_code, messages').order('id', { ascending: false }),
             new Promise<null>(resolve => { timeoutId = setTimeout(() => resolve(null), 3000); }),
           ]);
           if (result && !result.error && result.data) {
@@ -885,7 +887,7 @@ export default function RockyCADStudio() {
     setLoading(false);
   };
 
-  const handleCompile = async (code: string = currentCodeRef.current, retryCount = 0) => {
+  const handleCompile: (code?: string, retryCount?: number) => Promise<void> = useCallback(async (code = currentCodeRef.current, retryCount = 0) => {
     if (!code || code.includes('// Your active')) return;
     const requestId = ++compileRequestIdRef.current;
     if (retryCount === 0) {
@@ -953,7 +955,7 @@ export default function RockyCADStudio() {
 
           currentCodeRef.current = correctedCode;
           setCurrentCode(correctedCode);
-          await handleCompile(correctedCode, retryCount + 1);
+          await handleCompileRef.current?.(correctedCode, retryCount + 1);
         } catch (correctionError: unknown) {
           if (requestId !== compileRequestIdRef.current) return;
           setCompileStatus('');
@@ -981,7 +983,20 @@ export default function RockyCADStudio() {
     } finally {
       if (retryCount === 0) setCompiling(false);
     }
-  };
+  }, [stlUrl]);
+
+  useEffect(() => {
+    handleCompileRef.current = handleCompile;
+  }, [handleCompile]);
+
+  useEffect(() => {
+    if (!projectsLoadedRef.current || initialModelRestoreRef.current) return;
+    initialModelRestoreRef.current = true;
+
+    const savedCode = currentCode.trim();
+    if (!savedCode || savedCode.includes('// Your active')) return;
+    if (handleCompileRef.current) void handleCompileRef.current(savedCode);
+  }, [activeId, currentCode]);
 
   const handleLoadComponent = (component: string) => {
     const template = COMPONENT_TEMPLATES[component];
