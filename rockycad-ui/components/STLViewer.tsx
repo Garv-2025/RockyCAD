@@ -5,9 +5,9 @@ import { OrbitControls, Environment, GizmoHelper, GizmoViewport, Html, Line, Tra
 import { Geometry, Base, Subtraction, Addition } from '@react-three/csg';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { STLExporter } from 'three-stdlib';
-import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type MutableRefObject, type PointerEvent as ReactPointerEvent, type ReactNode, type SetStateAction } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type MutableRefObject, type PointerEvent as ReactPointerEvent, type ReactNode, type SetStateAction } from 'react';
 import * as THREE from 'three';
-import type { OrbitControls as OrbitControlsImpl, TransformControls as TransformControlsImpl } from 'three-stdlib';
+import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
 import { ChevronDown, ChevronUp, Layers, Scale } from 'lucide-react';
 
 export interface ManufacturingSpecs {
@@ -18,11 +18,6 @@ export interface ManufacturingSpecs {
 }
 
 type Orientation = [number, number, number];
-type ObjectTransform = {
-  position: [number, number, number];
-  rotation: [number, number, number];
-  scale: [number, number, number];
-};
 type GizmoMode = 'translate' | 'scale';
 const OVERHANG_DOT_THRESHOLD = 0.707;
 
@@ -223,37 +218,6 @@ function clampMeshAboveWorkplane(mesh: THREE.Mesh): number {
   return mesh.position.z;
 }
 
-type TransformDraggingChangedEvent = { type: 'dragging-changed'; value: boolean };
-type TransformControlsWithDraggingEvent = TransformControlsImpl & {
-  addEventListener(type: 'dragging-changed', listener: (event: TransformDraggingChangedEvent) => void): void;
-  removeEventListener(type: 'dragging-changed', listener: (event: TransformDraggingChangedEvent) => void): void;
-  addEventListener(type: 'mouseDown' | 'mouseUp', listener: () => void): void;
-  removeEventListener(type: 'mouseDown' | 'mouseUp', listener: () => void): void;
-};
-
-function useOrbitControlsDragListener(
-  transformControls: TransformControlsImpl | null,
-  orbitControlsRef: MutableRefObject<OrbitControlsImpl | null>,
-) {
-  useEffect(() => {
-    if (!transformControls) return;
-    const handleDraggingChanged = (event: TransformDraggingChangedEvent) => {
-      if (orbitControlsRef.current) orbitControlsRef.current.enabled = !event.value;
-    };
-    const handleMouseDown = () => handleDraggingChanged({ type: 'dragging-changed', value: true });
-    const handleMouseUp = () => handleDraggingChanged({ type: 'dragging-changed', value: false });
-    const controlsWithDraggingEvent = transformControls as TransformControlsWithDraggingEvent;
-    controlsWithDraggingEvent.addEventListener('dragging-changed', handleDraggingChanged);
-    controlsWithDraggingEvent.addEventListener('mouseDown', handleMouseDown);
-    controlsWithDraggingEvent.addEventListener('mouseUp', handleMouseUp);
-    return () => {
-      controlsWithDraggingEvent.removeEventListener('dragging-changed', handleDraggingChanged);
-      controlsWithDraggingEvent.removeEventListener('mouseDown', handleMouseDown);
-      controlsWithDraggingEvent.removeEventListener('mouseUp', handleMouseUp);
-    };
-  }, [orbitControlsRef, transformControls]);
-}
-
 function SceneGeometry({ object }: { object: SceneObject }) {
   const { params, type, operation } = object;
   const geometry = useMemo(() => {
@@ -273,7 +237,7 @@ function SceneGeometry({ object }: { object: SceneObject }) {
   return geometry ? <primitive object={geometry} attach="geometry" /> : null;
 }
 
-function ScenePrimitive({ object, selected, transformTarget, gizmoMode, snapDistance, isMeasureMode, setMeasurePoints, setHoverPoint, onSelect, onObjectContextMenu, onHover, dragPlane, onObjectDragStart, isDraggingRef, orbitControlsRef, onTransformObject, onMeshRef, lastMeshClickRef }: {
+function ScenePrimitive({ object, selected, transformTarget, gizmoMode, snapDistance, isMeasureMode, setMeasurePoints, setHoverPoint, onSelect, onObjectContextMenu, onHover, dragPlane, onObjectDragStart, onTransformDragging, onTransformObject, onMeshRef, lastMeshClickRef }: {
   object: SceneObject;
   selected: boolean;
   transformTarget: boolean;
@@ -287,30 +251,20 @@ function ScenePrimitive({ object, selected, transformTarget, gizmoMode, snapDist
   onHover: (id: string | null) => void;
   dragPlane: THREE.Plane;
   onObjectDragStart: (id: string, offset: [number, number, number]) => void;
-  isDraggingRef: MutableRefObject<boolean>;
-  orbitControlsRef: MutableRefObject<OrbitControlsImpl | null>;
+  onTransformDragging: (dragging: boolean) => void;
   onTransformObject: (id: string, position: [number, number, number], rotation: [number, number, number], scale: [number, number, number]) => void;
   onMeshRef: (id: string, mesh: THREE.Object3D | null) => void;
   lastMeshClickRef: MutableRefObject<number>;
 }) {
   const meshRef = useRef<THREE.Mesh>(null);
   const [meshObject, setMeshObject] = useState<THREE.Mesh | null>(null);
-  const [transformControls, setTransformControls] = useState<TransformControlsImpl | null>(null);
   const attachMeshRef = useCallback((mesh: THREE.Mesh | null) => {
     meshRef.current = mesh;
     onMeshRef(object.id, mesh);
     setMeshObject(current => current === mesh ? current : mesh);
   }, [object.id, onMeshRef]);
-  useOrbitControlsDragListener(transformControls, orbitControlsRef);
+  const meshScale = object.scale;
   const isHole = object.operation === 'hole';
-
-  useLayoutEffect(() => {
-    const mesh = meshRef.current;
-    if (!mesh || isDraggingRef.current) return;
-    mesh.position.set(...object.position);
-    mesh.rotation.set(...object.rotation);
-    mesh.scale.set(...object.scale);
-  }, [isDraggingRef, object.position, object.rotation, object.scale]);
 
   const handleMeasurePointerMove = (event: ThreeEvent<PointerEvent>) => {
     if (!isMeasureMode) return;
@@ -339,7 +293,7 @@ function ScenePrimitive({ object, selected, transformTarget, gizmoMode, snapDist
 
   const handleTransformEnd = () => {
     const mesh = meshRef.current;
-    if (!mesh || !isDraggingRef.current) return;
+    if (!mesh) return;
     const clampedZ = clampMeshAboveWorkplane(mesh);
     onTransformObject(
       object.id,
@@ -347,13 +301,16 @@ function ScenePrimitive({ object, selected, transformTarget, gizmoMode, snapDist
       [mesh.rotation.x, mesh.rotation.y, mesh.rotation.z],
       [mesh.scale.x, mesh.scale.y, mesh.scale.z],
     );
-    isDraggingRef.current = false;
+    onTransformDragging(false);
   };
 
   return (
     <>
       <mesh
         ref={attachMeshRef}
+        position={object.position}
+        rotation={object.rotation}
+        scale={meshScale}
         onPointerMove={isMeasureMode ? handleMeasurePointerMove : undefined}
         onPointerDown={handlePointerDown}
         onContextMenu={event => {
@@ -392,11 +349,10 @@ function ScenePrimitive({ object, selected, transformTarget, gizmoMode, snapDist
       </mesh>
       {transformTarget && meshObject && !isMeasureMode && (
         <TransformControls
-          ref={setTransformControls}
           object={meshObject}
           mode={gizmoMode}
           translationSnap={snapDistance}
-          onMouseDown={() => { isDraggingRef.current = true; }}
+          onMouseDown={() => onTransformDragging(true)}
           onMouseUp={handleTransformEnd}
         />
       )}
@@ -423,7 +379,7 @@ function renderGroupOperand(
   );
 }
 
-function SceneGroup({ object, selected, transformTarget, gizmoMode, snapDistance, isMeasureMode, setMeasurePoints, setHoverPoint, onSelect, onObjectContextMenu, onHover, dragPlane, onObjectDragStart, isDraggingRef, orbitControlsRef, onTransformObject, onMeshRef, lastMeshClickRef }: {
+function SceneGroup({ object, selected, transformTarget, gizmoMode, snapDistance, isMeasureMode, setMeasurePoints, setHoverPoint, onSelect, onObjectContextMenu, onHover, dragPlane, onObjectDragStart, onTransformDragging, onTransformObject, onMeshRef, lastMeshClickRef }: {
   object: SceneObject;
   selected: boolean;
   transformTarget: boolean;
@@ -437,30 +393,19 @@ function SceneGroup({ object, selected, transformTarget, gizmoMode, snapDistance
   onHover: (id: string | null) => void;
   dragPlane: THREE.Plane;
   onObjectDragStart: (id: string, offset: [number, number, number]) => void;
-  isDraggingRef: MutableRefObject<boolean>;
-  orbitControlsRef: MutableRefObject<OrbitControlsImpl | null>;
+  onTransformDragging: (dragging: boolean) => void;
   onTransformObject: (id: string, position: [number, number, number], rotation: [number, number, number], scale: [number, number, number]) => void;
   onMeshRef: (id: string, mesh: THREE.Object3D | null) => void;
   lastMeshClickRef: MutableRefObject<number>;
 }) {
   const groupRef = useRef<THREE.Mesh>(null);
   const [groupObject, setGroupObject] = useState<THREE.Mesh | null>(null);
-  const [transformControls, setTransformControls] = useState<TransformControlsImpl | null>(null);
   const attachGroupRef = useCallback((mesh: THREE.Mesh | null) => {
     groupRef.current = mesh;
     onMeshRef(object.id, mesh);
     setGroupObject(current => current === mesh ? current : mesh);
   }, [object.id, onMeshRef]);
-  useOrbitControlsDragListener(transformControls, orbitControlsRef);
   const children = object.children ?? [];
-
-  useLayoutEffect(() => {
-    const group = groupRef.current;
-    if (!group || isDraggingRef.current) return;
-    group.position.set(...object.position);
-    group.rotation.set(...object.rotation);
-    group.scale.set(...object.scale);
-  }, [isDraggingRef, object.position, object.rotation, object.scale]);
 
   const renderObjectGeometry = (child: SceneObject): ReactNode => {
     if (child.type !== 'group') return <SceneGeometry object={child} />;
@@ -497,6 +442,9 @@ function SceneGroup({ object, selected, transformTarget, gizmoMode, snapDistance
     <>
       <mesh
         ref={attachGroupRef}
+        position={object.position}
+        rotation={object.rotation}
+        scale={object.scale}
         onPointerMove={event => {
           if (!isMeasureMode) return;
           event.stopPropagation();
@@ -543,14 +491,13 @@ function SceneGroup({ object, selected, transformTarget, gizmoMode, snapDistance
       </mesh>
       {transformTarget && groupObject && !isMeasureMode && (
         <TransformControls
-          ref={setTransformControls}
           object={groupObject}
           mode={gizmoMode}
           translationSnap={snapDistance}
-          onMouseDown={() => { isDraggingRef.current = true; }}
+          onMouseDown={() => onTransformDragging(true)}
           onMouseUp={() => {
             const group = groupRef.current;
-            if (!group || !isDraggingRef.current) return;
+            if (!group) return;
             const clampedZ = clampMeshAboveWorkplane(group);
             onTransformObject(
               object.id,
@@ -558,7 +505,7 @@ function SceneGroup({ object, selected, transformTarget, gizmoMode, snapDistance
               [group.rotation.x, group.rotation.y, group.rotation.z],
               [group.scale.x, group.scale.y, group.scale.z],
             );
-            isDraggingRef.current = false;
+            onTransformDragging(false);
           }}
         />
       )}
@@ -566,7 +513,7 @@ function SceneGroup({ object, selected, transformTarget, gizmoMode, snapDistance
   );
 }
 
-function STLModel({ url, isMeasureMode, setMeasurePoints, setHoverPoint, wireframe, showOverhangs, clipPlane, orientation, autoOrientToken, parametricValues, compiledParamValues, gizmoMode, snapDistance, onSelectObject, onMeshRef, isDraggingRef, orbitControlsRef, onManufacturingSpecs, onOrientationOptimized, isSelected, lastMeshClickRef }: Omit<STLViewerProps, 'url' | 'sceneObjects' | 'pendingPasteObject' | 'selectedObjectIds' | 'show3DGrid' | 'showAxes' | 'exportSTLRef' | 'onObjectContextMenu' | 'onSelectObjects' | 'onObjectDragStart' | 'onObjectDragEnd' | 'onPlacePendingObject' | 'onTransformObject' | 'measurePoints' | 'hoverPoint' | 'cameraResetToken' | 'autoOrientToken' | 'onManufacturingSpecs'> & {
+function STLModel({ url, isMeasureMode, setMeasurePoints, setHoverPoint, wireframe, showOverhangs, clipPlane, orientation, autoOrientToken, parametricValues, compiledParamValues, gizmoMode, snapDistance, onSelectObject, onMeshRef, onTransformDragging, onManufacturingSpecs, onOrientationOptimized, isSelected, lastMeshClickRef }: Omit<STLViewerProps, 'url' | 'sceneObjects' | 'pendingPasteObject' | 'selectedObjectIds' | 'show3DGrid' | 'showAxes' | 'exportSTLRef' | 'onObjectContextMenu' | 'onSelectObjects' | 'onObjectDragStart' | 'onObjectDragEnd' | 'onPlacePendingObject' | 'onTransformObject' | 'measurePoints' | 'hoverPoint' | 'cameraResetToken' | 'autoOrientToken' | 'onManufacturingSpecs'> & {
   url: string;
   clipPlane: THREE.Plane;
   orientation: Orientation;
@@ -576,23 +523,12 @@ function STLModel({ url, isMeasureMode, setMeasurePoints, setHoverPoint, wirefra
   gizmoMode: GizmoMode;
   snapDistance: number | null;
   onMeshRef: (id: string, mesh: THREE.Object3D | null) => void;
-  isDraggingRef: MutableRefObject<boolean>;
-  orbitControlsRef: MutableRefObject<OrbitControlsImpl | null>;
+  onTransformDragging: (dragging: boolean) => void;
   onManufacturingSpecs: (specs: ManufacturingSpecs) => void;
   onOrientationOptimized: (orientation: Orientation, supportReduction: number) => void;
 }) {
   const geom = useLoader(STLLoader, url);
   if (!geom.boundingBox) geom.computeBoundingBox();
-  const centeredGeometry = useMemo(() => {
-    const geometry = geom.clone();
-    geometry.computeBoundingBox();
-    const center = new THREE.Vector3();
-    geometry.boundingBox?.getCenter(center);
-    geometry.center();
-    geometry.computeBoundingBox();
-    return { geometry, center };
-  }, [geom]);
-  const geometryCenter = centeredGeometry.center;
   const parametricScale = useMemo(
     () => getParametricPreviewScale(parametricValues, compiledParamValues),
     [compiledParamValues, parametricValues],
@@ -614,7 +550,7 @@ function STLModel({ url, isMeasureMode, setMeasurePoints, setHoverPoint, wirefra
   const overhangGeometry = useMemo(() => {
     if (!showOverhangs) return null;
 
-    const geometry = centeredGeometry.geometry.index ? centeredGeometry.geometry.toNonIndexed() : centeredGeometry.geometry.clone();
+    const geometry = geom.index ? geom.toNonIndexed() : geom.clone();
     const position = geometry.getAttribute('position');
     const colors = new Float32Array(position.count * 3);
     const safeColor = new THREE.Color('#444a54');
@@ -644,36 +580,17 @@ function STLModel({ url, isMeasureMode, setMeasurePoints, setHoverPoint, wirefra
     geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     geometry.computeBoundingBox();
     return geometry;
-  }, [centeredGeometry.geometry, orientationMatrix, showOverhangs]);
+  }, [geom, orientationMatrix, showOverhangs]);
   const meshRef = useRef<THREE.Mesh>(null);
   const [meshObject, setMeshObject] = useState<THREE.Mesh | null>(null);
-  const [transformControls, setTransformControls] = useState<TransformControlsImpl | null>(null);
-  const [stlTransform, setStlTransform] = useState<{ url: string; transform: ObjectTransform } | null>(null);
   const attachMeshRef = useCallback((mesh: THREE.Mesh | null) => {
     meshRef.current = mesh;
-    if (mesh && !isDraggingRef.current) mesh.position.copy(geometryCenter);
     setMeshObject(mesh);
     onMeshRef('compiled-model', mesh);
-  }, [geometryCenter, isDraggingRef, onMeshRef]);
+  }, [onMeshRef]);
   const processedAutoOrientToken = useRef(autoOrientToken);
-  useOrbitControlsDragListener(transformControls, orbitControlsRef);
 
-  useEffect(() => () => centeredGeometry.geometry.dispose(), [centeredGeometry.geometry]);
   useEffect(() => () => overhangGeometry?.dispose(), [overhangGeometry]);
-
-  useLayoutEffect(() => {
-    const mesh = meshRef.current;
-    if (!mesh || isDraggingRef.current) return;
-    if (stlTransform?.url === url) {
-      mesh.position.set(...stlTransform.transform.position);
-      mesh.rotation.set(...stlTransform.transform.rotation);
-      mesh.scale.set(...stlTransform.transform.scale);
-      return;
-    }
-    mesh.position.copy(geometryCenter);
-    mesh.rotation.set(0, 0, 0);
-    mesh.scale.set(1, 1, 1);
-  }, [geometryCenter, isDraggingRef, stlTransform, url]);
 
   useEffect(() => {
     onManufacturingSpecs(specs);
@@ -719,24 +636,11 @@ function STLModel({ url, isMeasureMode, setMeasurePoints, setHoverPoint, wirefra
     }
   };
 
-  const handleTransformEnd = () => {
-    const mesh = meshRef.current;
-    if (!mesh || !isDraggingRef.current) return;
-    clampMeshAboveWorkplane(mesh);
-    const transform: ObjectTransform = {
-      position: [mesh.position.x, mesh.position.y, mesh.position.z],
-      rotation: [mesh.rotation.x, mesh.rotation.y, mesh.rotation.z],
-      scale: [mesh.scale.x, mesh.scale.y, mesh.scale.z],
-    };
-    isDraggingRef.current = false;
-    setStlTransform({ url, transform });
-  };
-
   return (
     <group scale={parametricScale}>
       <mesh
         ref={attachMeshRef}
-        geometry={overhangGeometry ?? centeredGeometry.geometry}
+        geometry={overhangGeometry ?? geom}
         castShadow
         receiveShadow
         onPointerMove={isMeasureMode ? handlePointerMove : undefined}
@@ -753,18 +657,17 @@ function STLModel({ url, isMeasureMode, setMeasurePoints, setHoverPoint, wirefra
           }
         }}
       >
-        {/* Lightened the material to a bright aluminum so it pops against the dark grid */}
-        <meshStandardMaterial color={showOverhangs ? '#ffffff' : wireframe ? '#00ffcc' : '#cccccc'} vertexColors={showOverhangs} wireframe={wireframe} roughness={0.4} metalness={0.3} side={THREE.DoubleSide} clippingPlanes={[clipPlane]} />
-        {isSelected && <Edges geometry={meshObject?.geometry ?? overhangGeometry ?? centeredGeometry.geometry} linewidth={2} threshold={15} color="cyan" />}
+          {/* Lightened the material to a bright aluminum so it pops against the dark grid */}
+          <meshStandardMaterial color={showOverhangs ? '#ffffff' : wireframe ? '#00ffcc' : '#cccccc'} vertexColors={showOverhangs} wireframe={wireframe} roughness={0.4} metalness={0.3} side={THREE.DoubleSide} clippingPlanes={[clipPlane]} />
+          {isSelected && <Edges geometry={meshObject?.geometry ?? overhangGeometry ?? geom} linewidth={2} threshold={15} color="cyan" />}
       </mesh>
       {isSelected && meshObject && !isMeasureMode && (
         <TransformControls
-          ref={setTransformControls}
           object={meshObject}
           mode={gizmoMode}
           translationSnap={snapDistance}
-          onMouseDown={() => { isDraggingRef.current = true; }}
-          onMouseUp={handleTransformEnd}
+          onMouseDown={() => onTransformDragging(true)}
+          onMouseUp={() => onTransformDragging(false)}
         />
       )}
     </group>
@@ -782,7 +685,8 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
   const [marquee, setMarquee] = useState({ startX: 0, startY: 0, currentX: 0, currentY: 0, active: false });
   const [isDraggingObject, setIsDraggingObject] = useState(false);
   const [hoveredObjectId, setHoveredObjectId] = useState<string | null>(null);
-  const isDraggingRef = useRef(false);
+  const isTransformDraggingRef = useRef(false);
+  const originalRaycastsRef = useRef(new Map<THREE.Object3D, THREE.Object3D['raycast']>());
   const draggingObjectIdRef = useRef<string | null>(null);
   const draggedPositionRef = useRef<{ id: string; position: [number, number, number] } | null>(null);
   const pendingDragPointRef = useRef<THREE.Vector3 | null>(null);
@@ -799,6 +703,22 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
   const clipPlane = useMemo(() => new THREE.Plane(new THREE.Vector3(0, 0, -1), clipValue), [clipValue]);
   const dragPlane = useMemo(() => new THREE.Plane(new THREE.Vector3(0, 0, 1), 0), []);
   const [specs, setSpecs] = useState<{ url: string | null } & ManufacturingSpecs | null>(null);
+  const handleTransformDragging = useCallback((dragging: boolean) => {
+    isTransformDraggingRef.current = dragging;
+    if (dragging) {
+      for (const mesh of Object.values(meshRefs.current)) {
+        if (originalRaycastsRef.current.has(mesh)) continue;
+        originalRaycastsRef.current.set(mesh, mesh.raycast);
+        mesh.raycast = () => {};
+      }
+    } else {
+      for (const [mesh, raycast] of originalRaycastsRef.current) {
+        mesh.raycast = raycast;
+      }
+      originalRaycastsRef.current.clear();
+    }
+    if (controlsRef.current) controlsRef.current.enabled = !dragging && !isDraggingObject && !marquee.active;
+  }, [isDraggingObject, marquee.active]);
   const volume = specs?.url === url ? specs.volume_cm3 : null;
   const weight = specs?.url === url ? specs.weight_pla_grams : null;
   const cost = specs?.url === url ? specs.estimated_cost_usd : null;
@@ -853,6 +773,10 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
 
   useEffect(() => () => {
     if (dragFrameRef.current !== null) cancelAnimationFrame(dragFrameRef.current);
+    for (const [mesh, raycast] of originalRaycastsRef.current) {
+      mesh.raycast = raycast;
+    }
+    originalRaycastsRef.current.clear();
   }, []);
 
   const applyPendingDragPoint = useCallback(() => {
@@ -952,7 +876,7 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
   };
 
   const handleMarqueePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0 || pendingPasteObject || isMeasureMode || isDraggingObject || isDraggingRef.current) return;
+    if (event.button !== 0 || pendingPasteObject || isMeasureMode || isDraggingObject || isTransformDraggingRef.current) return;
     if (event.target !== canvasElementRef.current) return;
     const point = getViewportPoint(event);
     const camera = cameraRef.current;
@@ -1019,7 +943,9 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
   }, [cameraResetToken]);
 
   useEffect(() => {
-    if (controlsRef.current && !isDraggingRef.current) controlsRef.current.enabled = !isDraggingObject && !marquee.active;
+    if (controlsRef.current) {
+      controlsRef.current.enabled = !isTransformDraggingRef.current && !isDraggingObject && !marquee.active;
+    }
   }, [isDraggingObject, marquee.active]);
 
   useEffect(() => {
@@ -1031,12 +957,13 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
         }
         marqueePointerIdRef.current = null;
         setMarquee(current => ({ ...current, active: false }));
+        handleTransformDragging(false);
       }
     };
 
     window.addEventListener('keydown', handleShortcut);
     return () => window.removeEventListener('keydown', handleShortcut);
-  }, []);
+  }, [handleTransformDragging]);
 
   return (
     <div
@@ -1055,7 +982,7 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
           event.nativeEvent.preventDefault();
         }}
         onPointerMissed={() => {
-          if (performance.now() - lastMeshClickRef.current < 250 || isDraggingRef.current || isDraggingObject) return;
+          if (performance.now() - lastMeshClickRef.current < 250 || isTransformDraggingRef.current || isDraggingObject) return;
           onSelectObject(null);
         }}
         onCreated={({ gl }) => { gl.localClippingEnabled = true; canvasElementRef.current = gl.domElement; }}
@@ -1071,7 +998,7 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
           receiveShadow
           onClick={event => {
             event.stopPropagation();
-            if (performance.now() - lastMeshClickRef.current < 250 || isDraggingRef.current || isDraggingObject) return;
+            if (performance.now() - lastMeshClickRef.current < 250 || isTransformDraggingRef.current || isDraggingObject) return;
             onSelectObject(null);
           }}
         >
@@ -1127,6 +1054,7 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
               <group>
                 <group rotation={orientation}>
                   <STLModel
+                    key={url}
                     url={url}
                     wireframe={wireframe}
                     showOverhangs={showOverhangs}
@@ -1141,11 +1069,10 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
                     isSelected={selectedObjectIds.includes('compiled-model')}
                     lastMeshClickRef={lastMeshClickRef}
                     onMeshRef={registerMeshRef}
-                    isDraggingRef={isDraggingRef}
-                    orbitControlsRef={controlsRef}
                     isMeasureMode={isMeasureMode}
                     setMeasurePoints={setMeasurePoints}
                     setHoverPoint={setHoverPoint}
+                    onTransformDragging={handleTransformDragging}
                     onManufacturingSpecs={handleManufacturingSpecs}
                     onOrientationOptimized={handleOrientationOptimized}
                   />
@@ -1175,8 +1102,7 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
                 setIsDraggingObject(true);
                 onObjectDragStart(id);
               },
-              isDraggingRef,
-              orbitControlsRef: controlsRef,
+              onTransformDragging: handleTransformDragging,
               onTransformObject,
               lastMeshClickRef,
             };
