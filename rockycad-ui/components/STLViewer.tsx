@@ -207,14 +207,32 @@ function clampMeshAboveWorkplane(mesh: THREE.Mesh): number {
   if (!geometry.boundingBox) geometry.computeBoundingBox();
   if (!geometry.boundingBox || geometry.boundingBox.isEmpty()) return Math.max(0, mesh.position.z);
 
+  const parentScale = mesh.parent?.getWorldScale(new THREE.Vector3()) ?? new THREE.Vector3(1, 1, 1);
+  const dimensions = geometry.boundingBox.getSize(new THREE.Vector3());
+  for (const axis of ['x', 'y', 'z'] as const) {
+    const dimension = dimensions[axis];
+    if (dimension > 0) {
+      const sign = mesh.scale[axis] < 0 ? -1 : 1;
+      const worldDimension = dimension * Math.max(Math.abs(parentScale[axis]), 1e-6);
+      const magnitude = THREE.MathUtils.clamp(Math.abs(mesh.scale[axis]), 0.1 / worldDimension, 2000 / worldDimension);
+      mesh.scale[axis] = sign * magnitude;
+    }
+  }
   const localTransform = new THREE.Matrix4().compose(
     new THREE.Vector3(),
     mesh.quaternion,
     mesh.scale,
   );
   const bounds = geometry.boundingBox.clone().applyMatrix4(localTransform);
-  const minZ = Math.max(0, -bounds.min.z);
-  mesh.position.z = Math.max(mesh.position.z, minZ);
+  bounds.applyMatrix4(new THREE.Matrix4().makeScale(parentScale.x, parentScale.y, parentScale.z));
+  const xLimit = 2000 / Math.max(Math.abs(parentScale.x), 1e-6);
+  const yLimit = 2000 / Math.max(Math.abs(parentScale.y), 1e-6);
+  const zScale = Math.max(Math.abs(parentScale.z), 1e-6);
+  const minZ = Math.max(0, -bounds.min.z / zScale);
+  const maxZ = Math.max(minZ, (2000 - bounds.max.z) / zScale);
+  mesh.position.x = THREE.MathUtils.clamp(mesh.position.x, -xLimit, xLimit);
+  mesh.position.y = THREE.MathUtils.clamp(mesh.position.y, -yLimit, yLimit);
+  mesh.position.z = THREE.MathUtils.clamp(mesh.position.z, minZ, maxZ);
   return mesh.position.z;
 }
 
@@ -352,6 +370,9 @@ function ScenePrimitive({ object, selected, transformTarget, gizmoMode, snapDist
           object={meshObject}
           mode={gizmoMode}
           translationSnap={snapDistance}
+          onObjectChange={() => {
+            if (meshRef.current) clampMeshAboveWorkplane(meshRef.current);
+          }}
           onMouseDown={() => onTransformDragging(true)}
           onMouseUp={handleTransformEnd}
         />
@@ -494,6 +515,9 @@ function SceneGroup({ object, selected, transformTarget, gizmoMode, snapDistance
           object={groupObject}
           mode={gizmoMode}
           translationSnap={snapDistance}
+          onObjectChange={() => {
+            if (groupRef.current) clampMeshAboveWorkplane(groupRef.current);
+          }}
           onMouseDown={() => onTransformDragging(true)}
           onMouseUp={() => {
             const group = groupRef.current;
@@ -527,12 +551,50 @@ function STLModel({ url, isMeasureMode, setMeasurePoints, setHoverPoint, wirefra
   onManufacturingSpecs: (specs: ManufacturingSpecs) => void;
   onOrientationOptimized: (orientation: Orientation, supportReduction: number) => void;
 }) {
-  const geom = useLoader(STLLoader, url);
-  if (!geom.boundingBox) geom.computeBoundingBox();
+  const loadedGeometry = useLoader(STLLoader, url);
+  const { geom, initialPosition } = useMemo(() => {
+    const boundedGeometry = loadedGeometry.clone();
+    if (!boundedGeometry.boundingBox) boundedGeometry.computeBoundingBox();
+    const initialBounds = boundedGeometry.boundingBox;
+    if (!initialBounds || initialBounds.isEmpty()) {
+      return { geom: boundedGeometry, initialPosition: new THREE.Vector3() };
+    }
+
+    const initialSize = initialBounds.getSize(new THREE.Vector3());
+    const axisScale = (dimension: number) => dimension > 0
+      ? THREE.MathUtils.clamp(1, 0.1 / dimension, 2000 / dimension)
+      : 1;
+    boundedGeometry.scale(axisScale(initialSize.x), axisScale(initialSize.y), axisScale(initialSize.z));
+    boundedGeometry.computeBoundingBox();
+    const bounds = boundedGeometry.boundingBox!;
+    const size = bounds.getSize(new THREE.Vector3());
+    const center = bounds.getCenter(new THREE.Vector3());
+    const position = new THREE.Vector3(
+      THREE.MathUtils.clamp(center.x, -2000 + size.x / 2, 2000 - size.x / 2),
+      THREE.MathUtils.clamp(center.y, -2000 + size.y / 2, 2000 - size.y / 2),
+      size.z / 2,
+    );
+    boundedGeometry.translate(-center.x, -center.y, -center.z);
+    boundedGeometry.computeBoundingBox();
+    boundedGeometry.computeBoundingSphere();
+    return { geom: boundedGeometry, initialPosition: position };
+  }, [loadedGeometry]);
   const parametricScale = useMemo(
     () => getParametricPreviewScale(parametricValues, compiledParamValues),
     [compiledParamValues, parametricValues],
   );
+  const boundedParametricScale = useMemo(() => {
+    const size = geom.boundingBox?.getSize(new THREE.Vector3()) ?? new THREE.Vector3(1, 1, 1);
+    return parametricScale.map((value, axis) => {
+      const dimension = size.getComponent(axis);
+      const position = initialPosition.getComponent(axis);
+      const positionLimit = axis === 2 || dimension === 0
+        ? 2000 / Math.max(dimension, 0.1)
+        : 2000 / (Math.abs(position) + dimension / 2);
+      const maxScale = Math.min(2000 / Math.max(dimension, 0.1), positionLimit);
+      return THREE.MathUtils.clamp(value, dimension > 0 ? 0.1 / dimension : 0.1, maxScale);
+    }) as [number, number, number];
+  }, [geom, initialPosition, parametricScale]);
   const specs = useMemo<ManufacturingSpecs>(() => {
     const position = geom.getAttribute('position');
     const bounds = new THREE.Box3().setFromBufferAttribute(position as THREE.BufferAttribute);
@@ -585,9 +647,12 @@ function STLModel({ url, isMeasureMode, setMeasurePoints, setHoverPoint, wirefra
   const [meshObject, setMeshObject] = useState<THREE.Mesh | null>(null);
   const attachMeshRef = useCallback((mesh: THREE.Mesh | null) => {
     meshRef.current = mesh;
+    if (mesh) mesh.position.copy(initialPosition);
     setMeshObject(mesh);
     onMeshRef('compiled-model', mesh);
-  }, [onMeshRef]);
+  }, [initialPosition, onMeshRef]);
+
+  useEffect(() => () => geom.dispose(), [geom]);
   const processedAutoOrientToken = useRef(autoOrientToken);
 
   useEffect(() => () => overhangGeometry?.dispose(), [overhangGeometry]);
@@ -637,7 +702,7 @@ function STLModel({ url, isMeasureMode, setMeasurePoints, setHoverPoint, wirefra
   };
 
   return (
-    <group scale={parametricScale}>
+    <group scale={boundedParametricScale}>
       <mesh
         ref={attachMeshRef}
         geometry={overhangGeometry ?? geom}
@@ -666,8 +731,14 @@ function STLModel({ url, isMeasureMode, setMeasurePoints, setHoverPoint, wirefra
           object={meshObject}
           mode={gizmoMode}
           translationSnap={snapDistance}
+          onObjectChange={() => {
+            if (meshRef.current) clampMeshAboveWorkplane(meshRef.current);
+          }}
           onMouseDown={() => onTransformDragging(true)}
-          onMouseUp={() => onTransformDragging(false)}
+          onMouseUp={() => {
+            if (meshRef.current) clampMeshAboveWorkplane(meshRef.current);
+            onTransformDragging(false);
+          }}
         />
       )}
     </group>
@@ -686,7 +757,6 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
   const [isDraggingObject, setIsDraggingObject] = useState(false);
   const [hoveredObjectId, setHoveredObjectId] = useState<string | null>(null);
   const isTransformDraggingRef = useRef(false);
-  const originalRaycastsRef = useRef(new Map<THREE.Object3D, THREE.Object3D['raycast']>());
   const draggingObjectIdRef = useRef<string | null>(null);
   const draggedPositionRef = useRef<{ id: string; position: [number, number, number] } | null>(null);
   const pendingDragPointRef = useRef<THREE.Vector3 | null>(null);
@@ -705,18 +775,6 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
   const [specs, setSpecs] = useState<{ url: string | null } & ManufacturingSpecs | null>(null);
   const handleTransformDragging = useCallback((dragging: boolean) => {
     isTransformDraggingRef.current = dragging;
-    if (dragging) {
-      for (const mesh of Object.values(meshRefs.current)) {
-        if (originalRaycastsRef.current.has(mesh)) continue;
-        originalRaycastsRef.current.set(mesh, mesh.raycast);
-        mesh.raycast = () => {};
-      }
-    } else {
-      for (const [mesh, raycast] of originalRaycastsRef.current) {
-        mesh.raycast = raycast;
-      }
-      originalRaycastsRef.current.clear();
-    }
     if (controlsRef.current) controlsRef.current.enabled = !dragging && !isDraggingObject && !marquee.active;
   }, [isDraggingObject, marquee.active]);
   const volume = specs?.url === url ? specs.volume_cm3 : null;
@@ -773,10 +831,6 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
 
   useEffect(() => () => {
     if (dragFrameRef.current !== null) cancelAnimationFrame(dragFrameRef.current);
-    for (const [mesh, raycast] of originalRaycastsRef.current) {
-      mesh.raycast = raycast;
-    }
-    originalRaycastsRef.current.clear();
   }, []);
 
   const applyPendingDragPoint = useCallback(() => {
@@ -787,11 +841,11 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
 
     const newPos = currentHitPoint.clone().add(dragOffsetRef.current);
     newPos.z = draggedPosition.position[2];
-    newPos.x = THREE.MathUtils.clamp(newPos.x, -150, 150);
-    newPos.y = THREE.MathUtils.clamp(newPos.y, -150, 150);
+    newPos.x = THREE.MathUtils.clamp(newPos.x, -2000, 2000);
+    newPos.y = THREE.MathUtils.clamp(newPos.y, -2000, 2000);
     if (snapDistance !== null) {
-      newPos.x = THREE.MathUtils.clamp(Math.round(newPos.x / snapDistance) * snapDistance, -150, 150);
-      newPos.y = THREE.MathUtils.clamp(Math.round(newPos.y / snapDistance) * snapDistance, -150, 150);
+      newPos.x = THREE.MathUtils.clamp(Math.round(newPos.x / snapDistance) * snapDistance, -2000, 2000);
+      newPos.y = THREE.MathUtils.clamp(Math.round(newPos.y / snapDistance) * snapDistance, -2000, 2000);
     }
     draggedPosition.position = [newPos.x, newPos.y, newPos.z];
     meshRefs.current[draggingId]?.position.copy(newPos);
@@ -840,10 +894,11 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
       const ghostMesh = ghostMeshRef.current;
       if (ghostMesh) {
         ghostMesh.position.set(
-          THREE.MathUtils.clamp(currentHitPoint.x, -150, 150),
-          THREE.MathUtils.clamp(currentHitPoint.y, -150, 150),
+          THREE.MathUtils.clamp(currentHitPoint.x, -2000, 2000),
+          THREE.MathUtils.clamp(currentHitPoint.y, -2000, 2000),
           0,
         );
+        clampMeshAboveWorkplane(ghostMesh);
       }
       return;
     }
@@ -864,8 +919,8 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
     const intersection = new THREE.Vector3();
     if (!event.ray.intersectPlane(dragPlane, intersection)) return;
     onPlacePendingObject([
-      THREE.MathUtils.clamp(intersection.x, -150, 150),
-      THREE.MathUtils.clamp(intersection.y, -150, 150),
+      THREE.MathUtils.clamp(intersection.x, -2000, 2000),
+      THREE.MathUtils.clamp(intersection.y, -2000, 2000),
       0,
     ]);
   };
@@ -987,7 +1042,7 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
         }}
         onCreated={({ gl }) => { gl.localClippingEnabled = true; canvasElementRef.current = gl.domElement; }}
       >
-        <PerspectiveCamera ref={cameraRef} makeDefault position={[0, -150, 150]} up={[0, 0, 1]} fov={50} far={10000} />
+        <PerspectiveCamera ref={cameraRef} makeDefault position={[0, -150, 150]} up={[0, 0, 1]} fov={50} near={0.05} far={10000} />
         
         {/* 1. Dedicated Studio Background Color */}
         <color attach="background" args={['#f0f4f8']} />
@@ -1130,7 +1185,7 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
           ref={controlsRef}
           makeDefault
           enableRotate={!isMeasureMode}
-          minDistance={1}
+          minDistance={0.1}
           maxDistance={5000}
           maxPolarAngle={Math.PI / 2 + 0.1}
           mouseButtons={{

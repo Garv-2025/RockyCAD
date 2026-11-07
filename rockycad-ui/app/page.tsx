@@ -47,6 +47,9 @@ interface ProjectSession {
   code: string;
 }
 
+const SCENE_POSITION_LIMIT = 2000;
+const SCENE_DIMENSION_LIMIT = 2000;
+
 function getSceneObjectVerticalHalfExtent(object: SceneObject): number {
   if (object.type === 'group') {
     return (object.children ?? []).reduce(
@@ -67,6 +70,62 @@ function getSceneObjectVerticalHalfExtent(object: SceneObject): number {
   return Math.abs(rotation.elements[2]) * scaledHalfDimensions[0] +
     Math.abs(rotation.elements[6]) * scaledHalfDimensions[1] +
     Math.abs(rotation.elements[10]) * scaledHalfDimensions[2];
+}
+
+function normalizeSceneObject(object: SceneObject): SceneObject {
+  const dimensionKeys = new Set(['x', 'y', 'z', 'd', 'h', 'tube', 'radius', 'diameter', 'width', 'depth', 'length', 'height', 'thickness']);
+  const params = { ...object.params };
+  for (const key of dimensionKeys) {
+    if (key in params) {
+      params[key] = THREE.MathUtils.clamp(Number.isFinite(params[key]) ? params[key] : 0.1, 0.1, SCENE_DIMENSION_LIMIT);
+    }
+  }
+  if ('segments' in params) {
+    params.segments = Math.max(3, Math.floor(Number.isFinite(params.segments) ? params.segments : 3));
+  }
+
+  const children = object.children?.map(normalizeSceneObject);
+  const axisDimensions = object.type === 'box' || object.type === 'wedge'
+    ? [params.x, params.y, params.z]
+    : object.type === 'sphere'
+      ? [params.d, params.d, params.d]
+      : object.type === 'torus'
+        ? [params.d, params.d, params.tube]
+        : object.type === 'group'
+          ? [1, 1, 1]
+          : [params.d, params.d, params.h];
+  const scale = object.scale.map((value, axis) => {
+    const dimension = axisDimensions[axis] || 1;
+    const minScale = Math.min(1, 0.1 / dimension);
+    const maxScale = SCENE_DIMENSION_LIMIT / dimension;
+    const magnitude = THREE.MathUtils.clamp(Number.isFinite(value) ? Math.abs(value) : 1, minScale, maxScale);
+    return value < 0 ? -magnitude : magnitude;
+  }) as [number, number, number];
+
+  const normalized: SceneObject = {
+    ...object,
+    params,
+    scale,
+    rotation: object.rotation.map(value => Number.isFinite(value) ? value : 0) as [number, number, number],
+    ...(children ? { children } : {}),
+    position: object.position.map(value => Number.isFinite(value) ? value : 0) as [number, number, number],
+  };
+  let verticalHalfExtent = getSceneObjectVerticalHalfExtent(normalized);
+  if (verticalHalfExtent > SCENE_POSITION_LIMIT / 2) {
+    const factor = (SCENE_POSITION_LIMIT / 2) / verticalHalfExtent;
+    normalized.scale = normalized.scale.map(value => value * factor) as [number, number, number];
+    verticalHalfExtent = getSceneObjectVerticalHalfExtent(normalized);
+  }
+  normalized.position = [
+    THREE.MathUtils.clamp(object.position[0], -SCENE_POSITION_LIMIT, SCENE_POSITION_LIMIT),
+    THREE.MathUtils.clamp(object.position[1], -SCENE_POSITION_LIMIT, SCENE_POSITION_LIMIT),
+    THREE.MathUtils.clamp(object.position[2], verticalHalfExtent, SCENE_POSITION_LIMIT - verticalHalfExtent),
+  ];
+  return normalized;
+}
+
+function normalizeSceneObjects(objects: SceneObject[]): SceneObject[] {
+  return objects.map(normalizeSceneObject);
 }
 
 function parseGeneratedSceneObjects(jsonPayload: string): SceneObject[] {
@@ -136,7 +195,7 @@ function parseGeneratedSceneObjects(jsonPayload: string): SceneObject[] {
       }
     }
 
-    return {
+    return normalizeSceneObject({
       id: crypto.randomUUID(),
       type,
       operation: shape.isHole === true ? 'hole' : 'solid',
@@ -147,7 +206,7 @@ function parseGeneratedSceneObjects(jsonPayload: string): SceneObject[] {
       name: typeof shape.name === 'string' && shape.name.trim()
         ? shape.name
         : `${type[0].toUpperCase()}${type.slice(1)} ${index + 1}`,
-    };
+    });
   });
 }
 
@@ -447,6 +506,9 @@ export default function RockyCADStudio() {
   const [selectedObjectIds, setSelectedObjectIds] = useState<string[]>([]);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; objectId: string } | null>(null);
   const [isShapeMenuOpen, setIsShapeMenuOpen] = useState(false);
+  const [isActionBarExpanded, setIsActionBarExpanded] = useState(false);
+  const [isShapeInspectorOpen, setIsShapeInspectorOpen] = useState(false);
+  const [dismissedInspectorSelectionId, setDismissedInspectorSelectionId] = useState<string | null>(null);
   const [inspectorTab, setInspectorTab] = useState<'position' | 'dimensions'>('position');
   const [gizmoMode, setGizmoMode] = useState<'translate' | 'scale'>('translate');
   const [gridSnapSize, setGridSnapSize] = useState<number | null>(1);
@@ -509,12 +571,17 @@ export default function RockyCADStudio() {
   const selectedSceneObject = selectedObjectIds.length === 1
     ? sceneObjects.find(object => object.id === selectedObjectId) ?? null
     : null;
+  const showShapeInspector = selectedSceneObject !== null && (
+    isStudioExpanded
+      ? dismissedInspectorSelectionId !== selectedSceneObject.id
+      : isShapeInspectorOpen
+  );
   const selectedDimensionFields: Array<{ label: string; key: string; factor?: number; min: number }> = selectedSceneObject?.type === 'box'
     ? [{ label: 'Width', key: 'x', min: 0.1 }, { label: 'Length', key: 'y', min: 0.1 }, { label: 'Height', key: 'z', min: 0.1 }]
     : selectedSceneObject?.type === 'wedge'
       ? [{ label: 'Width', key: 'x', min: 0.1 }, { label: 'Length', key: 'y', min: 0.1 }, { label: 'Height', key: 'z', min: 0.1 }]
     : selectedSceneObject?.type === 'sphere'
-      ? [{ label: 'Radius', key: 'd', factor: 2, min: 0.05 }]
+      ? [{ label: 'Radius', key: 'd', factor: 2, min: 0.1 }]
       : selectedSceneObject?.type === 'torus'
         ? [{ label: 'Outer diameter', key: 'd', min: 0.1 }, { label: 'Tube diameter', key: 'tube', min: 0.1 }]
         : selectedSceneObject && selectedSceneObject.type !== 'group'
@@ -536,7 +603,7 @@ export default function RockyCADStudio() {
           if (!Array.isArray(parsed)) {
             throw new Error('Saved RockyCAD workspace must be an array.');
           }
-          savedSceneObjects = parsed as SceneObject[];
+          savedSceneObjects = normalizeSceneObjects(parsed as SceneObject[]);
         }
       } catch (error: unknown) {
         console.error('Unable to load the saved RockyCAD workspace.', error);
@@ -1087,7 +1154,7 @@ export default function RockyCADStudio() {
     ]);
     undoHistoryRef.current.push(sceneObjectsRef.current);
     redoHistoryRef.current = [];
-    const updatedObjects = [...sceneObjectsRef.current, ...presetObjects];
+    const updatedObjects = normalizeSceneObjects([...sceneObjectsRef.current, ...presetObjects]);
     sceneObjectsRef.current = updatedObjects;
     setSceneObjects(updatedObjects);
     setSelectedObjectIds(presetObjects.filter(object => object.operation === 'solid').map(object => object.id));
@@ -1115,6 +1182,7 @@ export default function RockyCADStudio() {
 
   const commitSceneObjects = (updatedObjects: SceneObject[], options: { recordHistory?: boolean } = {}) => {
     const { recordHistory = true } = options;
+    const boundedObjects = normalizeSceneObjects(updatedObjects);
     const removesObjects = updatedObjects.length < sceneObjectsRef.current.length;
     compileRequestIdRef.current += 1;
     setCompiling(false);
@@ -1123,10 +1191,10 @@ export default function RockyCADStudio() {
       undoHistoryRef.current.push(sceneObjectsRef.current);
       redoHistoryRef.current = [];
     }
-    sceneObjectsRef.current = updatedObjects;
+    sceneObjectsRef.current = boundedObjects;
     const sourceCode = currentCodeRef.current.includes('// Your active') ? '' : currentCodeRef.current;
-    const updatedCode = syncSceneObjectsToCode(sourceCode, updatedObjects, removesObjects || updatedObjects.length === 0);
-    setSceneObjects(updatedObjects);
+    const updatedCode = syncSceneObjectsToCode(sourceCode, boundedObjects, removesObjects || boundedObjects.length === 0);
+    setSceneObjects(boundedObjects);
     isSyncingFromSceneRef.current = updatedCode !== currentCodeRef.current;
     setCurrentCode(updatedCode);
     currentCodeRef.current = updatedCode;
@@ -1161,7 +1229,7 @@ export default function RockyCADStudio() {
   const previewSelectedSceneObject = (update: (object: SceneObject) => SceneObject) => {
     if (!selectedObjectId) return;
     handleScenePreviewStart();
-    const updatedObjects = sceneObjectsRef.current.map(object => object.id === selectedObjectId ? update(object) : object);
+    const updatedObjects = normalizeSceneObjects(sceneObjectsRef.current.map(object => object.id === selectedObjectId ? update(object) : object));
     sceneObjectsRef.current = updatedObjects;
     setSceneObjects(updatedObjects);
     scenePreviewChangedRef.current = true;
@@ -2010,7 +2078,18 @@ export default function RockyCADStudio() {
                 ))}
               </div>
             )}
-            <div className="absolute left-3 top-12 z-20 flex max-w-[calc(100%-18rem)] items-center gap-1 overflow-x-auto rounded-xl border border-neutral-700/50 bg-neutral-900/60 p-1 text-[10px] shadow-xl backdrop-blur-md">
+            <div className="absolute left-3 top-3 z-30 flex w-fit max-w-[calc(100%-1.5rem)] flex-col items-start gap-2">
+            {!isActionBarExpanded ? (
+              <button
+                type="button"
+                onClick={() => setIsActionBarExpanded(true)}
+                aria-label="Show scene actions"
+                title="Show scene actions"
+                className="flex h-10 w-10 items-center justify-center rounded-full border border-neutral-700/70 bg-neutral-900/80 text-white shadow-xl backdrop-blur-md transition-colors hover:bg-neutral-800"
+              >
+                <Box className="h-4 w-4" />
+              </button>
+            ) : <div role="toolbar" aria-label="Scene actions" className="flex max-w-full flex-wrap items-center gap-1 rounded-xl border border-neutral-700/50 bg-neutral-900/80 p-1 text-[10px] shadow-xl backdrop-blur-md">
               <button type="button" onClick={groupSelectedObjects} disabled={selectedObjectIds.length <= 1} title="Join selected objects (Ctrl+G)" className="rounded px-2 py-1 text-blue-300 hover:bg-blue-500/15 disabled:cursor-not-allowed disabled:opacity-40">Join</button>
               {selectedObjectIds.length > 1 ? <>
                 <button type="button" onClick={deleteSelectedSceneObject} title="Delete selected" className="rounded px-2 py-1 text-red-300 hover:bg-red-500/20">Delete</button>
@@ -2036,12 +2115,15 @@ export default function RockyCADStudio() {
                   {value === null ? 'Off' : `${value}mm`}
                 </button>
               ))}
-            </div>
-            <div className="absolute left-3 top-24 z-10 rounded-xl border border-neutral-700/50 bg-neutral-900/60 p-1.5 text-[10px] shadow-xl backdrop-blur-md">
+              <button type="button" onClick={() => setIsActionBarExpanded(false)} aria-label="Close scene actions" title="Close scene actions" className="rounded p-1.5 text-[#aaaaaa] hover:bg-[#222222] hover:text-white">
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>}
+            <div className="relative z-30 rounded-xl border border-neutral-700/50 bg-neutral-900/80 p-1.5 text-[10px] shadow-xl backdrop-blur-md">
               <button type="button" aria-haspopup="menu" aria-expanded={isShapeMenuOpen} onClick={() => setIsShapeMenuOpen(open => !open)} className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 font-medium text-white hover:bg-white/10">
                 <Plus className="h-3.5 w-3.5" /> Add Shape
               </button>
-              {isShapeMenuOpen && <div role="menu" className="absolute left-0 top-full z-30 mt-1 grid w-40 grid-cols-2 gap-1 rounded-xl border border-neutral-700/50 bg-neutral-900/90 p-2 shadow-xl backdrop-blur-md">
+              {isShapeMenuOpen && <div role="menu" className="absolute left-0 top-full z-40 mt-1 grid w-40 grid-cols-2 gap-1 rounded-xl border border-neutral-700/50 bg-neutral-900/95 p-2 shadow-xl backdrop-blur-md">
               {([
                 ['box', 'Box'],
                 ['cylinder', 'Cylinder'],
@@ -2058,14 +2140,44 @@ export default function RockyCADStudio() {
               ))}
               </div>}
             </div>
-            {selectedSceneObject && (
+            </div>
+            {selectedSceneObject && !showShapeInspector && (
+              <button
+                type="button"
+                onClick={() => {
+                  setDismissedInspectorSelectionId(null);
+                  if (isStudioExpanded) setIsShapeInspectorOpen(false);
+                  else setIsShapeInspectorOpen(true);
+                }}
+                aria-label="Open shape inspector"
+                title="Open shape inspector"
+                className="absolute right-3 top-1/2 z-20 flex -translate-y-1/2 items-center gap-1.5 rounded-full border border-neutral-700/70 bg-neutral-900/85 px-3 py-2 text-[10px] font-medium text-white shadow-xl backdrop-blur-md transition-colors hover:bg-neutral-800"
+              >
+                <Settings className="h-3.5 w-3.5" /> Inspector
+              </button>
+            )}
+            {showShapeInspector && selectedSceneObject && (
               <section aria-label="Shape Inspector" className="absolute right-3 top-12 z-20 max-h-[calc(100%-8rem)] w-64 overflow-y-auto rounded-xl border border-neutral-700/50 bg-neutral-900/60 p-3 text-[10px] shadow-xl backdrop-blur-md">
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <div className="min-w-0">
                     <h3 className="font-semibold uppercase tracking-wide text-white">Shape Inspector</h3>
                     <p className="truncate text-[#888888]">{selectedSceneObject.name}</p>
                   </div>
-                  <button type="button" onClick={deleteSelectedSceneObject} title="Delete (Del)" aria-label="Delete selected shape" className="rounded p-1.5 text-red-300 hover:bg-red-500/20"><Trash2 className="h-3.5 w-3.5" /></button>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <button type="button" onClick={deleteSelectedSceneObject} title="Delete (Del)" aria-label="Delete selected shape" className="rounded p-1.5 text-red-300 hover:bg-red-500/20"><Trash2 className="h-3.5 w-3.5" /></button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsShapeInspectorOpen(false);
+                        if (isStudioExpanded) setDismissedInspectorSelectionId(selectedSceneObject.id);
+                      }}
+                      title="Close Shape Inspector"
+                      aria-label="Close Shape Inspector"
+                      className="rounded p-1.5 text-[#aaaaaa] hover:bg-[#222222] hover:text-white"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
                 </div>
                 <div className="mb-3 grid grid-cols-2 gap-1" role="tablist" aria-label="Shape inspector sections">
                   <button type="button" role="tab" aria-selected={inspectorTab === 'position'} onClick={() => setInspectorTab('position')} className={`rounded px-2 py-1.5 ${inspectorTab === 'position' ? 'bg-blue-500/20 text-blue-300' : 'bg-[#222222] text-[#aaaaaa]'}`}>Position</button>
@@ -2083,6 +2195,10 @@ export default function RockyCADStudio() {
                         <input
                           type="number"
                           value={selectedSceneObject.position[index]}
+                          min={index === 2 ? getSceneObjectVerticalHalfExtent(selectedSceneObject) : -SCENE_POSITION_LIMIT}
+                          max={index === 2
+                            ? SCENE_POSITION_LIMIT - getSceneObjectVerticalHalfExtent(selectedSceneObject)
+                            : SCENE_POSITION_LIMIT}
                           step="0.1"
                           aria-label={`Position ${axis}`}
                           onChange={event => {
@@ -2097,8 +2213,10 @@ export default function RockyCADStudio() {
                         />
                         <input
                           type="range"
-                          min={index === 2 ? -150 : -200}
-                          max="200"
+                          min={index === 2 ? getSceneObjectVerticalHalfExtent(selectedSceneObject) : -SCENE_POSITION_LIMIT}
+                          max={index === 2
+                            ? SCENE_POSITION_LIMIT - getSceneObjectVerticalHalfExtent(selectedSceneObject)
+                            : SCENE_POSITION_LIMIT}
                           step="1"
                           value={selectedSceneObject.position[index]}
                           aria-label={`Slide position ${axis}`}
@@ -2124,7 +2242,7 @@ export default function RockyCADStudio() {
                   {selectedDimensionFields.map(field => {
                     const factor = field.factor ?? 1;
                     const value = (selectedSceneObject.params[field.key] ?? 0) / factor;
-                    const max = Math.max(100, value * 2);
+                    const max = SCENE_DIMENSION_LIMIT / factor;
                     return (
                       <label key={field.key} className="block text-[#aaaaaa]">
                         <span>{field.label}</span>
@@ -2132,6 +2250,7 @@ export default function RockyCADStudio() {
                           <input
                             type="number"
                             min={field.min}
+                            max={max}
                             step="0.1"
                             value={Number(value.toFixed(2))}
                             onChange={event => {
