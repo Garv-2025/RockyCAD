@@ -688,6 +688,7 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
   const [isDraggingObject, setIsDraggingObject] = useState(false);
   const [hoveredObjectId, setHoveredObjectId] = useState<string | null>(null);
   const draggingObjectIdRef = useRef<string | null>(null);
+  const draggedPositionRef = useRef<{ id: string; position: [number, number, number] } | null>(null);
   const meshRefs = useRef<Record<string, THREE.Object3D>>({});
   const ghostMeshRef = useRef<THREE.Mesh>(null);
   const dragOffsetRef = useRef(new THREE.Vector3());
@@ -760,11 +761,15 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
     const draggingId = draggingObjectIdRef.current;
     if (!draggingId) return;
     draggingObjectIdRef.current = null;
+    const draggedPosition = draggedPositionRef.current;
+    draggedPositionRef.current = null;
     const mesh = meshRefs.current[draggingId];
     const object = sceneObjects.find(candidate => candidate.id === draggingId);
-    const position: [number, number, number] = mesh
-      ? [mesh.position.x, mesh.position.y, mesh.position.z]
-      : object?.position ?? [0, 0, 0];
+    const position: [number, number, number] = draggedPosition?.id === draggingId
+      ? [...draggedPosition.position]
+      : mesh
+        ? [mesh.position.x, mesh.position.y, mesh.position.z]
+        : object?.position ?? [0, 0, 0];
     setIsDraggingObject(false);
     delete document.body.dataset.rockyCadDragging;
     document.body.style.cursor = 'default';
@@ -797,18 +802,18 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
     }
 
     const draggingId = draggingObjectIdRef.current;
-    if (!draggingId || event.buttons !== 1) return;
-    const object = sceneObjects.find(candidate => candidate.id === draggingId);
-    if (!object) return;
+    const draggedPosition = draggedPositionRef.current;
+    if (!draggingId || event.buttons !== 1 || draggedPosition?.id !== draggingId) return;
 
     const newPos = currentHitPoint.clone().add(dragOffsetRef.current);
-    newPos.z = object.position[2];
+    newPos.z = draggedPosition.position[2];
     newPos.x = THREE.MathUtils.clamp(newPos.x, -150, 150);
     newPos.y = THREE.MathUtils.clamp(newPos.y, -150, 150);
     if (snapDistance !== null) {
       newPos.x = THREE.MathUtils.clamp(Math.round(newPos.x / snapDistance) * snapDistance, -150, 150);
       newPos.y = THREE.MathUtils.clamp(Math.round(newPos.y / snapDistance) * snapDistance, -150, 150);
     }
+    draggedPosition.position = [newPos.x, newPos.y, newPos.z];
     meshRefs.current[draggingId]?.position.copy(newPos);
   };
 
@@ -1046,6 +1051,7 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
               onObjectDragStart: (id: string, offset: [number, number, number]) => {
                 dragOffsetRef.current.fromArray(offset);
                 draggingObjectIdRef.current = id;
+                draggedPositionRef.current = { id, position: [...object.position] };
                 setIsDraggingObject(true);
                 onObjectDragStart(id);
               },
