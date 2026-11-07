@@ -682,13 +682,15 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
   const canvasElementRef = useRef<HTMLCanvasElement | null>(null);
   const exportGroupRef = useRef<THREE.Group>(null);
   const marqueePointerIdRef = useRef<number | null>(null);
-  const [orbitEnabled, setOrbitEnabled] = useState(true);
   const [marquee, setMarquee] = useState({ startX: 0, startY: 0, currentX: 0, currentY: 0, active: false });
-  const [isTransformDragging, setIsTransformDragging] = useState(false);
   const [isDraggingObject, setIsDraggingObject] = useState(false);
   const [hoveredObjectId, setHoveredObjectId] = useState<string | null>(null);
+  const isTransformDraggingRef = useRef(false);
+  const originalRaycastsRef = useRef(new Map<THREE.Object3D, THREE.Object3D['raycast']>());
   const draggingObjectIdRef = useRef<string | null>(null);
   const draggedPositionRef = useRef<{ id: string; position: [number, number, number] } | null>(null);
+  const pendingDragPointRef = useRef<THREE.Vector3 | null>(null);
+  const dragFrameRef = useRef<number | null>(null);
   const meshRefs = useRef<Record<string, THREE.Object3D>>({});
   const ghostMeshRef = useRef<THREE.Mesh>(null);
   const dragOffsetRef = useRef(new THREE.Vector3());
@@ -702,9 +704,21 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
   const dragPlane = useMemo(() => new THREE.Plane(new THREE.Vector3(0, 0, 1), 0), []);
   const [specs, setSpecs] = useState<{ url: string | null } & ManufacturingSpecs | null>(null);
   const handleTransformDragging = useCallback((dragging: boolean) => {
-    setIsTransformDragging(dragging);
-    setOrbitEnabled(!dragging);
-  }, []);
+    isTransformDraggingRef.current = dragging;
+    if (dragging) {
+      for (const mesh of Object.values(meshRefs.current)) {
+        if (originalRaycastsRef.current.has(mesh)) continue;
+        originalRaycastsRef.current.set(mesh, mesh.raycast);
+        mesh.raycast = () => {};
+      }
+    } else {
+      for (const [mesh, raycast] of originalRaycastsRef.current) {
+        mesh.raycast = raycast;
+      }
+      originalRaycastsRef.current.clear();
+    }
+    if (controlsRef.current) controlsRef.current.enabled = !dragging && !isDraggingObject && !marquee.active;
+  }, [isDraggingObject, marquee.active]);
   const volume = specs?.url === url ? specs.volume_cm3 : null;
   const weight = specs?.url === url ? specs.weight_pla_grams : null;
   const cost = specs?.url === url ? specs.estimated_cost_usd : null;
@@ -757,12 +771,45 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
     if (orientationToastTimeout.current) clearTimeout(orientationToastTimeout.current);
   }, []);
 
+  useEffect(() => () => {
+    if (dragFrameRef.current !== null) cancelAnimationFrame(dragFrameRef.current);
+    for (const [mesh, raycast] of originalRaycastsRef.current) {
+      mesh.raycast = raycast;
+    }
+    originalRaycastsRef.current.clear();
+  }, []);
+
+  const applyPendingDragPoint = useCallback(() => {
+    const draggingId = draggingObjectIdRef.current;
+    const draggedPosition = draggedPositionRef.current;
+    const currentHitPoint = pendingDragPointRef.current;
+    if (!draggingId || draggedPosition?.id !== draggingId || !currentHitPoint) return;
+
+    const newPos = currentHitPoint.clone().add(dragOffsetRef.current);
+    newPos.z = draggedPosition.position[2];
+    newPos.x = THREE.MathUtils.clamp(newPos.x, -150, 150);
+    newPos.y = THREE.MathUtils.clamp(newPos.y, -150, 150);
+    if (snapDistance !== null) {
+      newPos.x = THREE.MathUtils.clamp(Math.round(newPos.x / snapDistance) * snapDistance, -150, 150);
+      newPos.y = THREE.MathUtils.clamp(Math.round(newPos.y / snapDistance) * snapDistance, -150, 150);
+    }
+    draggedPosition.position = [newPos.x, newPos.y, newPos.z];
+    meshRefs.current[draggingId]?.position.copy(newPos);
+    pendingDragPointRef.current = null;
+  }, [snapDistance]);
+
   const finishObjectDrag = useCallback(() => {
     const draggingId = draggingObjectIdRef.current;
     if (!draggingId) return;
+    if (dragFrameRef.current !== null) {
+      cancelAnimationFrame(dragFrameRef.current);
+      dragFrameRef.current = null;
+    }
+    applyPendingDragPoint();
     draggingObjectIdRef.current = null;
     const draggedPosition = draggedPositionRef.current;
     draggedPositionRef.current = null;
+    pendingDragPointRef.current = null;
     const mesh = meshRefs.current[draggingId];
     const object = sceneObjects.find(candidate => candidate.id === draggingId);
     const position: [number, number, number] = draggedPosition?.id === draggingId
@@ -774,7 +821,7 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
     delete document.body.dataset.rockyCadDragging;
     document.body.style.cursor = 'default';
     onObjectDragEnd(draggingId, position);
-  }, [onObjectDragEnd, sceneObjects]);
+  }, [applyPendingDragPoint, onObjectDragEnd, sceneObjects]);
 
   useEffect(() => {
     const handlePointerRelease = () => finishObjectDrag();
@@ -802,19 +849,13 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
     }
 
     const draggingId = draggingObjectIdRef.current;
-    const draggedPosition = draggedPositionRef.current;
-    if (!draggingId || event.buttons !== 1 || draggedPosition?.id !== draggingId) return;
-
-    const newPos = currentHitPoint.clone().add(dragOffsetRef.current);
-    newPos.z = draggedPosition.position[2];
-    newPos.x = THREE.MathUtils.clamp(newPos.x, -150, 150);
-    newPos.y = THREE.MathUtils.clamp(newPos.y, -150, 150);
-    if (snapDistance !== null) {
-      newPos.x = THREE.MathUtils.clamp(Math.round(newPos.x / snapDistance) * snapDistance, -150, 150);
-      newPos.y = THREE.MathUtils.clamp(Math.round(newPos.y / snapDistance) * snapDistance, -150, 150);
-    }
-    draggedPosition.position = [newPos.x, newPos.y, newPos.z];
-    meshRefs.current[draggingId]?.position.copy(newPos);
+    if (!draggingId || event.buttons !== 1) return;
+    pendingDragPointRef.current = currentHitPoint;
+    if (dragFrameRef.current !== null) return;
+    dragFrameRef.current = requestAnimationFrame(() => {
+      dragFrameRef.current = null;
+      applyPendingDragPoint();
+    });
   };
 
   const handleFloorPointerDown = (event: ThreeEvent<PointerEvent>) => {
@@ -835,7 +876,7 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
   };
 
   const handleMarqueePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0 || pendingPasteObject || isMeasureMode || isDraggingObject || isTransformDragging) return;
+    if (event.button !== 0 || pendingPasteObject || isMeasureMode || isDraggingObject || isTransformDraggingRef.current) return;
     if (event.target !== canvasElementRef.current) return;
     const point = getViewportPoint(event);
     const camera = cameraRef.current;
@@ -902,6 +943,12 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
   }, [cameraResetToken]);
 
   useEffect(() => {
+    if (controlsRef.current) {
+      controlsRef.current.enabled = !isTransformDraggingRef.current && !isDraggingObject && !marquee.active;
+    }
+  }, [isDraggingObject, marquee.active]);
+
+  useEffect(() => {
     const handleShortcut = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         const pointerId = marqueePointerIdRef.current;
@@ -910,13 +957,13 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
         }
         marqueePointerIdRef.current = null;
         setMarquee(current => ({ ...current, active: false }));
-        setIsTransformDragging(() => false);
+        handleTransformDragging(false);
       }
     };
 
     window.addEventListener('keydown', handleShortcut);
     return () => window.removeEventListener('keydown', handleShortcut);
-  }, []);
+  }, [handleTransformDragging]);
 
   return (
     <div
@@ -935,7 +982,7 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
           event.nativeEvent.preventDefault();
         }}
         onPointerMissed={() => {
-          if (performance.now() - lastMeshClickRef.current < 250 || isTransformDragging || isDraggingObject) return;
+          if (performance.now() - lastMeshClickRef.current < 250 || isTransformDraggingRef.current || isDraggingObject) return;
           onSelectObject(null);
         }}
         onCreated={({ gl }) => { gl.localClippingEnabled = true; canvasElementRef.current = gl.domElement; }}
@@ -951,7 +998,7 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
           receiveShadow
           onClick={event => {
             event.stopPropagation();
-            if (performance.now() - lastMeshClickRef.current < 250 || isTransformDragging || isDraggingObject) return;
+            if (performance.now() - lastMeshClickRef.current < 250 || isTransformDraggingRef.current || isDraggingObject) return;
             onSelectObject(null);
           }}
         >
@@ -1083,7 +1130,6 @@ export default function STLViewer({ url, sceneObjects, pendingPasteObject, selec
           ref={controlsRef}
           makeDefault
           enableRotate={!isMeasureMode}
-          enabled={orbitEnabled && !isTransformDragging && !isDraggingObject && !marquee.active}
           minDistance={1}
           maxDistance={5000}
           maxPolarAngle={Math.PI / 2 + 0.1}
