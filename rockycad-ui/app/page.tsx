@@ -5,8 +5,8 @@ import Image from 'next/image';
 import ReactMarkdown from 'react-markdown';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
-import { Send, Square, Copy, Edit2, Play, Code2, Check, Loader2, MessageSquare, Plus, Trash2, Download, Box, User, Settings, X, Ruler, RotateCcw, RotateCw, ChevronDown, Paperclip, Maximize2, Minimize2, PanelRightClose, PanelRightOpen, Move, Scale } from 'lucide-react';
-import { createClient } from '@supabase/supabase-js';
+import { Send, Square, Copy, Edit2, Play, Code2, Check, Loader2, MessageSquare, Plus, Trash2, Download, Box, Settings, X, Ruler, RotateCcw, RotateCw, ChevronDown, Paperclip, Maximize2, Minimize2, PanelRightClose, PanelRightOpen, Move, Scale } from 'lucide-react';
+import { createClient, type User as SupabaseUser } from '@supabase/supabase-js';
 import JSZip from 'jszip';
 import * as THREE from 'three';
 import STLViewer, { type ManufacturingSpecs, type SceneObject } from '../components/STLViewer';
@@ -471,6 +471,72 @@ function computeSliderBounds(initialValue: number): { min: number; max: number; 
 }
 
 export default function RockyCADStudio() {
+  const [user, setUser] = useState<SupabaseUser | null>(null);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState('');
+  const [authMessage, setAuthMessage] = useState('');
+  const [authMode, setAuthMode] = useState<'signIn' | 'signUp'>('signIn');
+
+  useEffect(() => {
+    if (!supabase) return;
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+    });
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const handleAuth = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!supabase) {
+      setAuthError('Authentication is unavailable because Supabase is not configured.');
+      return;
+    }
+
+    setAuthLoading(true);
+    setAuthError('');
+    setAuthMessage('');
+    try {
+      const { data, error } = authMode === 'signUp'
+        ? await supabase.auth.signUp({ email, password })
+        : await supabase.auth.signInWithPassword({ email, password });
+      if (error) throw error;
+
+      if (authMode === 'signUp' && !data.session) {
+        setAuthMessage('Check your email to confirm your account, then sign in.');
+        return;
+      }
+
+      setShowAuthModal(false);
+      setPassword('');
+    } catch (error: unknown) {
+      setAuthError(error instanceof Error ? error.message : 'Authentication failed.');
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleSignOut = async () => {
+    if (!supabase) {
+      setAuthError('Authentication is unavailable because Supabase is not configured.');
+      return;
+    }
+
+    setAuthLoading(true);
+    setAuthError('');
+    try {
+      const { error } = await supabase.auth.signOut();
+      if (error) throw error;
+    } catch (error: unknown) {
+      setAuthError(error instanceof Error ? error.message : 'Unable to sign out.');
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
   // Session State
   const [sessions, setSessions] = useState<ProjectSession[]>([]);
   const [activeId, setActiveId] = useState<string>('');
@@ -1821,17 +1887,45 @@ export default function RockyCADStudio() {
         </div>
 
         <div className="border-t border-[#222222] pt-4 mt-auto">
-          <button type="button" onClick={() => setIsSettingsOpen(true)} aria-label="Open Studio Settings" className="w-full flex items-center justify-between p-2 rounded-lg hover:bg-[#151515] cursor-pointer transition-colors text-left">
-            <div className="flex items-center gap-3">
-              <div className="w-9 h-9 rounded-full bg-[#222222] flex items-center justify-center text-[#888888]">
-                <User className="w-4 h-4" />
+          <div className="mb-3 space-y-2">
+            {user ? (
+              <div className="flex items-center justify-between gap-2 px-2">
+                <span className="truncate text-sm text-white" title={user.email ?? undefined}>
+                  {user.email}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => void handleSignOut()}
+                  disabled={authLoading}
+                  className="shrink-0 rounded-md px-2 py-1 text-xs text-[#aaaaaa] transition-colors hover:bg-[#222222] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {authLoading ? 'Signing out…' : 'Sign Out'}
+                </button>
               </div>
-              <div>
-                <div className="text-sm text-white">Garv</div>
-                <div className="text-xs text-[#888888]">Free Tier</div>
-              </div>
-            </div>
-            <Settings className="w-4 h-4 text-[#888888]" />
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  setAuthError('');
+                  setAuthMessage('');
+                  setAuthMode('signIn');
+                  setShowAuthModal(true);
+                }}
+                className="w-full rounded-lg border border-[#333333] px-3 py-2 text-sm text-[#cccccc] transition-colors hover:border-[#666666] hover:bg-[#151515] hover:text-white"
+              >
+                Click to Sign In
+              </button>
+            )}
+            {authError && <p role="alert" className="px-2 text-xs text-red-400">{authError}</p>}
+          </div>
+          <button
+            type="button"
+            onClick={() => setIsSettingsOpen(true)}
+            aria-label="Open Studio Settings"
+            className="flex w-full items-center gap-3 rounded-lg p-2 text-left text-sm text-[#888888] transition-colors hover:bg-[#151515] hover:text-white"
+          >
+            <Settings className="h-4 w-4" />
+            Studio Settings
           </button>
         </div>
       </aside>
@@ -2658,6 +2752,83 @@ export default function RockyCADStudio() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {showAuthModal && (
+        <div
+          className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
+          onClick={() => setShowAuthModal(false)}
+        >
+          <form
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="auth-modal-title"
+            onSubmit={handleAuth}
+            onClick={(event) => event.stopPropagation()}
+            className="w-full max-w-sm rounded-lg border border-[#333333] bg-[#101010] p-6 shadow-2xl"
+          >
+            <div className="mb-5 flex items-center justify-between">
+              <h2 id="auth-modal-title" className="text-lg font-semibold text-white">
+                {authMode === 'signUp' ? 'Create your account' : 'Sign in to RockyCAD'}
+              </h2>
+              <button
+                type="button"
+                onClick={() => setShowAuthModal(false)}
+                aria-label="Close authentication dialog"
+                className="rounded-md p-1.5 text-[#888888] transition-colors hover:bg-[#222222] hover:text-white"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <label className="block text-sm text-[#cccccc]">
+                Email
+                <input
+                  type="email"
+                  autoComplete="email"
+                  required
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  className="mt-1 w-full rounded-md border border-[#333333] bg-[#1a1a1a] px-3 py-2 text-white focus:border-[#666666] focus:outline-none"
+                />
+              </label>
+              <label className="block text-sm text-[#cccccc]">
+                Password
+                <input
+                  type="password"
+                  autoComplete={authMode === 'signUp' ? 'new-password' : 'current-password'}
+                  required
+                  minLength={6}
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  className="mt-1 w-full rounded-md border border-[#333333] bg-[#1a1a1a] px-3 py-2 text-white focus:border-[#666666] focus:outline-none"
+                />
+              </label>
+              {authError && <p role="alert" className="text-sm text-red-400">{authError}</p>}
+              {authMessage && <p role="status" className="text-sm text-green-400">{authMessage}</p>}
+              <button
+                type="submit"
+                disabled={authLoading}
+                className="w-full rounded-md bg-white px-4 py-2 text-sm font-medium text-black transition-colors hover:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {authLoading ? 'Please wait…' : authMode === 'signUp' ? 'Create account' : 'Sign in'}
+              </button>
+              <button
+                type="button"
+                disabled={authLoading}
+                onClick={() => {
+                  setAuthMode(authMode === 'signUp' ? 'signIn' : 'signUp');
+                  setAuthError('');
+                  setAuthMessage('');
+                }}
+                className="w-full text-sm text-[#aaaaaa] hover:text-white disabled:opacity-60"
+              >
+                {authMode === 'signUp' ? 'Already have an account? Sign in' : 'New to RockyCAD? Create an account'}
+              </button>
+            </div>
+          </form>
         </div>
       )}
     </main>

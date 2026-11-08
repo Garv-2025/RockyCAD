@@ -1,5 +1,7 @@
 {
   "dependencies": {
+    "@supabase/ssr": "^0.12.7",
+    "@supabase/supabase-js": "^2.119.0",
     "jzip": "^1.0.0"
   }
 }
