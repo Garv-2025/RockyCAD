@@ -479,6 +479,7 @@ export default function RockyCADStudio() {
   const [authError, setAuthError] = useState('');
   const [authMessage, setAuthMessage] = useState('');
   const [authMode, setAuthMode] = useState<'signIn' | 'signUp'>('signIn');
+  const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
 
   useEffect(() => {
     if (!supabase) return;
@@ -514,6 +515,25 @@ export default function RockyCADStudio() {
       setPassword('');
     } catch (error: unknown) {
       setAuthError(error instanceof Error ? error.message : 'Authentication failed.');
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleGoogleSignIn = async () => {
+    if (!supabase) {
+      setAuthError('Authentication is unavailable because Supabase is not configured.');
+      return;
+    }
+
+    setAuthLoading(true);
+    setAuthError('');
+    setAuthMessage('');
+    try {
+      const { error } = await supabase.auth.signInWithOAuth({ provider: 'google' });
+      if (error) throw error;
+    } catch (error: unknown) {
+      setAuthError(error instanceof Error ? error.message : 'Google sign-in failed.');
     } finally {
       setAuthLoading(false);
     }
@@ -596,6 +616,7 @@ export default function RockyCADStudio() {
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
+  const profileMenuRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const currentCodeRef = useRef(currentCode);
   const sceneObjectsRef = useRef(sceneObjects);
@@ -626,7 +647,12 @@ export default function RockyCADStudio() {
   const currentModelSpecs = modelSpecs?.url === stlUrl ? modelSpecs.specs : null;
 
   useEffect(() => {
-    const closeContextMenu = () => setContextMenu(null);
+    const closeContextMenu = (event: MouseEvent) => {
+      setContextMenu(null);
+      if (!(event.target instanceof Node) || !profileMenuRef.current?.contains(event.target)) {
+        setIsProfileMenuOpen(false);
+      }
+    };
     window.addEventListener('click', closeContextMenu);
     return () => window.removeEventListener('click', closeContextMenu);
   }, []);
@@ -1889,18 +1915,61 @@ export default function RockyCADStudio() {
         <div className="border-t border-[#222222] pt-4 mt-auto">
           <div className="mb-3 space-y-2">
             {user ? (
-              <div className="flex items-center justify-between gap-2 px-2">
-                <span className="truncate text-sm text-white" title={user.email ?? undefined}>
-                  {user.email}
-                </span>
+              <div ref={profileMenuRef} className="relative px-2">
                 <button
                   type="button"
-                  onClick={() => void handleSignOut()}
-                  disabled={authLoading}
-                  className="shrink-0 rounded-md px-2 py-1 text-xs text-[#aaaaaa] transition-colors hover:bg-[#222222] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                  aria-label="Open account menu"
+                  aria-haspopup="menu"
+                  aria-expanded={isProfileMenuOpen}
+                  aria-controls="profile-menu"
+                  onClick={() => setIsProfileMenuOpen(open => !open)}
+                  className="flex h-10 w-10 items-center justify-center rounded-full border border-[#444444] bg-[#1a1a1a] text-sm font-semibold text-white transition-colors hover:border-[#666666] hover:bg-[#222222] focus:outline-none focus:ring-2 focus:ring-white/30"
                 >
-                  {authLoading ? 'Signing out…' : 'Sign Out'}
+                  {user.email?.trim().charAt(0).toUpperCase() || 'U'}
                 </button>
+                {isProfileMenuOpen && (
+                  <div
+                    id="profile-menu"
+                    role="menu"
+                    aria-label="Account options"
+                    className="absolute bottom-full left-2 z-50 mb-3 w-52 rounded-xl border border-[#333333] bg-[#101010] p-3 shadow-2xl"
+                  >
+                    <div className="mb-3 border-b border-[#292929] pb-3">
+                      <p className="truncate text-sm font-medium text-white" title={user.email ?? undefined}>
+                        {user.email ?? 'No email available'}
+                      </p>
+                      <span className="mt-1.5 inline-flex rounded-full border border-[#3b3b3b] bg-[#1a1a1a] px-2 py-0.5 text-[10px] font-medium text-[#aaaaaa]">
+                        Free Tier
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setIsProfileMenuOpen(false);
+                        setAuthError('');
+                        setAuthMessage('');
+                        setAuthMode('signIn');
+                        setShowAuthModal(true);
+                      }}
+                      className="w-full rounded-md px-2.5 py-2 text-left text-xs text-[#cccccc] transition-colors hover:bg-[#222222] hover:text-white"
+                    >
+                      Add another account
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setIsProfileMenuOpen(false);
+                        void handleSignOut();
+                      }}
+                      disabled={authLoading}
+                      className="mt-1 w-full rounded-md px-2.5 py-2 text-left text-xs text-red-300 transition-colors hover:bg-red-500/10 hover:text-red-200 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {authLoading ? 'Signing out…' : 'Sign out'}
+                    </button>
+                  </div>
+                )}
               </div>
             ) : (
               <button
@@ -2780,6 +2849,22 @@ export default function RockyCADStudio() {
               >
                 <X className="h-4 w-4" />
               </button>
+            </div>
+
+            <div className="mb-5 space-y-4">
+              <button
+                type="button"
+                disabled={authLoading}
+                onClick={() => void handleGoogleSignIn()}
+                className="w-full rounded-md border border-[#333333] bg-[#1a1a1a] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[#222222] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {authLoading ? 'Please wait…' : 'Sign In with Google'}
+              </button>
+              <div className="flex items-center gap-3 text-xs text-[#666666]">
+                <span className="h-px flex-1 bg-[#333333]" />
+                <span>OR</span>
+                <span className="h-px flex-1 bg-[#333333]" />
+              </div>
             </div>
 
             <div className="space-y-4">
