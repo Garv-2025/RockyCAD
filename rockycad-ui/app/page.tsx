@@ -530,7 +530,10 @@ export default function RockyCADStudio() {
     setAuthError('');
     setAuthMessage('');
     try {
-      const { error } = await supabase.auth.signInWithOAuth({ provider: 'google' });
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: { redirectTo: `${window.location.origin}/auth/callback` },
+      });
       if (error) throw error;
     } catch (error: unknown) {
       setAuthError(error instanceof Error ? error.message : 'Google sign-in failed.');
