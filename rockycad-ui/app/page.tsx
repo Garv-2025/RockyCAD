@@ -532,7 +532,10 @@ export default function RockyCADStudio() {
     try {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
-        options: { redirectTo: window.location.origin },
+        options: {
+          redirectTo: window.location.origin,
+          queryParams: { prompt: 'select_account' },
+        },
       });
       if (error) throw error;
     } catch (error: unknown) {
@@ -1950,10 +1953,7 @@ export default function RockyCADStudio() {
                       role="menuitem"
                       onClick={() => {
                         setIsProfileMenuOpen(false);
-                        setAuthError('');
-                        setAuthMessage('');
-                        setAuthMode('signIn');
-                        setShowAuthModal(true);
+                        void handleGoogleSignIn();
                       }}
                       className="w-full rounded-md px-2.5 py-2 text-left text-xs text-[#cccccc] transition-colors hover:bg-[#222222] hover:text-white"
                     >
