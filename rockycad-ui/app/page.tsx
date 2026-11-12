@@ -379,6 +379,65 @@ async function readApiError(response: Response): Promise<string> {
   return responseText;
 }
 
+async function readChatStream(response: Response, onText: (text: string) => void): Promise<string> {
+  if (!response.body) throw new Error('Chat response did not include a stream.');
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let responseText = '';
+
+  const processEvent = (event: string) => {
+    const data = event
+      .split(/\r?\n/)
+      .filter(line => line.startsWith('data:'))
+      .map(line => line.slice(5).trimStart())
+      .join('\n');
+    if (!data || data === '[DONE]') return;
+
+    let payload: unknown;
+    try {
+      payload = JSON.parse(data);
+    } catch {
+      throw new Error('Chat stream contained invalid JSON.');
+    }
+    if (typeof payload !== 'object' || payload === null || !('choices' in payload) || !Array.isArray(payload.choices)) {
+      throw new Error('Chat stream contained an invalid completion event.');
+    }
+
+    const choice = payload.choices[0];
+    if (typeof choice !== 'object' || choice === null || !('delta' in choice)) return;
+    const delta = choice.delta;
+    if (typeof delta === 'object' && delta !== null && 'content' in delta && typeof delta.content === 'string') {
+      responseText += delta.content;
+      onText(responseText);
+    }
+  };
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      buffer += decoder.decode(value, { stream: !done });
+
+      let separatorMatch = /\r?\n\r?\n/.exec(buffer);
+      while (separatorMatch) {
+        processEvent(buffer.slice(0, separatorMatch.index));
+        buffer = buffer.slice(separatorMatch.index + separatorMatch[0].length);
+        separatorMatch = /\r?\n\r?\n/.exec(buffer);
+      }
+
+      if (done) {
+        if (buffer.trim()) processEvent(buffer);
+        break;
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  return responseText;
+}
+
 const COMPONENT_TEMPLATES: Record<string, string> = {
   'NEMA 17 Stepper Mount': `$fn = 64;
 
@@ -1012,9 +1071,17 @@ export default function RockyCADStudio() {
 
       if (!res.ok) throw new Error(await readApiError(res));
 
-      const data = await res.json();
-      const conversationalText = typeof data.message === 'string' ? stripSafetyMetadata(data.message) : '';
-      const jsonPayload = typeof data.json_payload === 'string' ? data.json_payload.trim() : '';
+      const responseText = stripSafetyMetadata(await readChatStream(res, streamedText => {
+        setMessages([...currentHistory, {
+          role: 'assistant',
+          content: stripSafetyMetadata(streamedText),
+        }]);
+      }));
+      const jsonMatch = /```json\b\s*([\s\S]*?)```/i.exec(responseText);
+      const jsonPayload = jsonMatch?.[1].trim() ?? '';
+      const conversationalText = jsonMatch
+        ? `${responseText.slice(0, jsonMatch.index)}${responseText.slice(jsonMatch.index + jsonMatch[0].length)}`.trim()
+        : responseText.trim();
 
       if (jsonPayload) {
         const newObjects = parseGeneratedSceneObjects(jsonPayload);

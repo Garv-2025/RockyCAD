@@ -1,3 +1,4 @@
+export const maxDuration = 60;
 type ChatHistoryMessage = {
   role: 'user' | 'assistant';
   content: string;
@@ -40,10 +41,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function stripSafetyMetadata(text: string): string {
-  return text.replace(/\b(?:User|Response)\s+Safety\s*:\s*[a-z_-]+\b/gi, '').trim();
-}
-
 function isChatHistoryMessage(value: unknown): value is ChatHistoryMessage {
   return isRecord(value) &&
     (value.role === 'user' || value.role === 'assistant') &&
@@ -59,33 +56,26 @@ async function requestCompletion(
   model: string,
   messages: OpenRouterMessage[],
   signal: AbortSignal,
-): Promise<string> {
-  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+): Promise<Response> {
+  const backendResponse = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ model, messages }),
+    body: JSON.stringify({ model, messages, stream: true }),
     signal,
   });
-  const result: unknown = await response.json().catch(() => null);
 
-  if (!response.ok) {
+  if (!backendResponse.ok) {
+    const result: unknown = await backendResponse.json().catch(() => null);
     const detail = isRecord(result) && isRecord(result.error) && typeof result.error.message === 'string'
       ? result.error.message
-      : response.statusText;
-    throw new Error(`OpenRouter request failed (${response.status}): ${detail}`);
+      : backendResponse.statusText;
+    throw new Error(`OpenRouter request failed (${backendResponse.status}): ${detail}`);
   }
 
-  if (!isRecord(result) || !Array.isArray(result.choices) || !isRecord(result.choices[0])) {
-    throw new Error('OpenRouter returned an invalid chat completion response.');
-  }
-  const choiceMessage = result.choices[0].message;
-  if (!isRecord(choiceMessage)) {
-    throw new Error('OpenRouter returned a chat completion without a message.');
-  }
-  return typeof choiceMessage.content === 'string' ? choiceMessage.content : '';
+  return backendResponse;
 }
 
 export async function POST(request: Request) {
@@ -168,9 +158,9 @@ export async function POST(request: Request) {
     }
   }
 
-  let responseText: string;
+  let backendResponse: Response;
   try {
-    responseText = await requestCompletion(
+    backendResponse = await requestCompletion(
       apiKey,
       'meta-llama/llama-3.3-70b-instruct:free',
       promptMessages,
@@ -180,7 +170,7 @@ export async function POST(request: Request) {
     if (request.signal.aborted) return new Response(null, { status: 499 });
     console.warn('Primary model failed; retrying generation with openrouter/free:', getErrorMessage(primaryError));
     try {
-      responseText = await requestCompletion(apiKey, 'openrouter/free', promptMessages, request.signal);
+      backendResponse = await requestCompletion(apiKey, 'openrouter/free', promptMessages, request.signal);
     } catch (fallbackError: unknown) {
       console.error('OpenRouter CAD chat generation failed:', getErrorMessage(fallbackError));
       return Response.json(
@@ -190,12 +180,11 @@ export async function POST(request: Request) {
     }
   }
 
-  responseText = stripSafetyMetadata(responseText);
-  const jsonMatch = /```json\b\s*([\s\S]*?)```/i.exec(responseText);
-  const jsonPayload = jsonMatch?.[1].trim() ?? '';
-  const message = jsonMatch
-    ? `${responseText.slice(0, jsonMatch.index)}${responseText.slice(jsonMatch.index + jsonMatch[0].length)}`.trim()
-    : responseText.trim();
-
-  return Response.json({ message, json_payload: jsonPayload });
+  return new Response(backendResponse.body, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    },
+  });
 }
